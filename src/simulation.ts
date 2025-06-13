@@ -53,7 +53,7 @@ export async function runSimulation(
   apiEndpoint: string,
   block_hash: string,
   block_height: number,
-  txs: (StacksTransactionWire | SimulationEval)[]
+  txs: (StacksTransactionWire | SimulationEval | 'reset-cost')[]
 ) {
   // Convert 'sim-v1' to Uint8Array
   const header = new TextEncoder().encode('sim-v1');
@@ -78,7 +78,10 @@ export async function runSimulation(
 
   // Convert transactions to bytes
   const txBytes = txs
-    .map((t) => ('contract_id' in t && 'code' in t ? runEval(t) : runTx(t)))
+    .map((t) => t === 'reset-cost' ? tupleCV({
+      type: uintCV(4),
+      data: uintCV(0),
+    }) : ('contract_id' in t && 'code' in t ? runEval(t) : runTx(t)))
     .map((t) => serializeCVBytes(t));
 
   // Combine all byte arrays
@@ -139,6 +142,7 @@ export class SimulationBuilder {
   private block = NaN;
   private sender = '';
   private steps: (
+    | 'reset-cost'
     | {
       // inline simulation
       simulationId: string;
@@ -182,6 +186,10 @@ export class SimulationBuilder {
       simulationId,
     })
     return this;
+  }
+  public resetCost() {
+    this.steps.push('reset-cost')
+    return this
   }
   public addSTXTransfer(params: {
     recipient: string;
@@ -304,7 +312,7 @@ To get in touch: contact@stxer.xyz
     console.log(
       `Using block height ${block.block_height} hash 0x${block.block_hash} to run simulation.`
     );
-    const txs: (StacksTransactionWire | SimulationEval)[] = [];
+    const txs: (StacksTransactionWire | SimulationEval | 'reset-cost')[] = [];
     const nonce_by_address = new Map<string, number>();
     const nextNonce = async (sender: string) => {
       const nonce = nonce_by_address.get(sender);
@@ -331,8 +339,10 @@ To get in touch: contact@stxer.xyz
       };
     }
     for (const step of this.steps) {
-      if ('simulationId' in step) {
-        const previousSimulation: {steps: ({tx: string} | {code: string, contract: string})[]} = await fetch(`https://api.stxer.xyz/simulations/${step.simulationId}/request`).then(x => x.json())
+      if (step === 'reset-cost') {
+        txs.push("reset-cost")
+      } else if ('simulationId' in step) {
+        const previousSimulation: { steps: ({ tx: string } | { code: string, contract: string })[] } = await fetch(`https://api.stxer.xyz/simulations/${step.simulationId}/request`).then(x => x.json())
         for (const step of previousSimulation.steps) {
           if ('tx' in step) {
             txs.push(deserializeTransaction(step.tx));
