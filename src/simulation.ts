@@ -126,9 +126,13 @@ export class SimulationBuilder {
   private network: StacksNetworkName | string;
 
   private constructor(options: SimulationBuilderOptions = {}) {
-    this.apiEndpoint = options.apiEndpoint ?? 'https://api.stxer.xyz';
-    this.stacksNodeAPI = options.stacksNodeAPI ?? 'https://api.hiro.so';
     this.network = options.network ?? 'mainnet';
+    const isTestnet = this.network === 'testnet';
+    
+    this.apiEndpoint = options.apiEndpoint ?? 
+      (isTestnet ? 'https://testnet-api.stxer.xyz' : 'https://api.stxer.xyz');
+    this.stacksNodeAPI = options.stacksNodeAPI ?? 
+      (isTestnet ? 'https://api.testnet.hiro.so' : 'https://api.hiro.so');
   }
 
   public static new(options?: SimulationBuilderOptions) {
