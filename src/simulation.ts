@@ -1,27 +1,55 @@
-import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
-import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
+  AddressVersion,
   STACKS_MAINNET,
   STACKS_TESTNET,
   type StacksNetworkName,
 } from '@stacks/network';
+import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
+  AddressHashMode,
+  bufferCV,
   type ClarityValue,
   ClarityVersion,
-  PostConditionMode,
-  type StacksTransactionWire,
-  bufferCV,
   contractPrincipalCV,
   deserializeTransaction,
+  type MultiSigSpendingCondition,
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
+  PostConditionMode,
+  type StacksTransactionWire,
   serializeCVBytes,
   stringAsciiCV,
   tupleCV,
   uintCV,
 } from '@stacks/transactions';
 import { c32addressDecode } from 'c32check';
+import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
+
+function setSender(tx: StacksTransactionWire, sender: string) {
+  const [addressVersion, signer] = c32addressDecode(sender);
+  switch (addressVersion) {
+    case AddressVersion.MainnetSingleSig:
+    case AddressVersion.TestnetSingleSig:
+      tx.auth.spendingCondition.hashMode = AddressHashMode.P2PKH;
+      tx.auth.spendingCondition.signer = signer;
+      break;
+    case AddressVersion.MainnetMultiSig:
+    case AddressVersion.TestnetMultiSig: {
+      const sc = tx.auth.spendingCondition;
+      tx.auth.spendingCondition = {
+        hashMode: AddressHashMode.P2SH,
+        signer,
+        fields: [],
+        signaturesRequired: 0,
+        nonce: sc.nonce,
+        fee: sc.fee,
+      } as MultiSigSpendingCondition;
+      break;
+    }
+  }
+  return tx;
+}
 
 function runTx(tx: StacksTransactionWire) {
   // type 0: run transaction
@@ -43,8 +71,8 @@ export function runEval({ contract_id, code }: SimulationEval) {
         tupleCV({
           contract: contractPrincipalCV(contract_address, contract_name),
           code: stringAsciiCV(code),
-        })
-      )
+        }),
+      ),
     ),
   });
 }
@@ -53,7 +81,7 @@ export async function runSimulation(
   apiEndpoint: string,
   block_hash: string,
   block_height: number,
-  txs: (StacksTransactionWire | SimulationEval)[]
+  txs: (StacksTransactionWire | SimulationEval)[],
 ) {
   // Convert 'sim-v1' to Uint8Array
   const header = new TextEncoder().encode('sim-v1');
@@ -73,7 +101,7 @@ export async function runSimulation(
     throw new Error('Invalid block hash format');
   }
   const hashBytes = new Uint8Array(
-    matches.map((byte) => Number.parseInt(byte, 16))
+    matches.map((byte) => Number.parseInt(byte, 16)),
   );
 
   // Convert transactions to bytes
@@ -128,10 +156,12 @@ export class SimulationBuilder {
   private constructor(options: SimulationBuilderOptions = {}) {
     this.network = options.network ?? 'mainnet';
     const isTestnet = this.network === 'testnet';
-    
-    this.apiEndpoint = options.apiEndpoint ?? 
+
+    this.apiEndpoint =
+      options.apiEndpoint ??
       (isTestnet ? 'https://testnet-api.stxer.xyz' : 'https://api.stxer.xyz');
-    this.stacksNodeAPI = options.stacksNodeAPI ?? 
+    this.stacksNodeAPI =
+      options.stacksNodeAPI ??
       (isTestnet ? 'https://api.testnet.hiro.so' : 'https://api.hiro.so');
   }
 
@@ -139,37 +169,37 @@ export class SimulationBuilder {
     return new SimulationBuilder(options);
   }
 
-  // biome-ignore lint/style/useNumberNamespace: <explanation>
+  // biome-ignore lint/style/useNumberNamespace: ignore this
   private block = NaN;
   private sender = '';
   private steps: (
     | {
-      // inline simulation
-      simulationId: string;
-    }
+        // inline simulation
+        simulationId: string;
+      }
     | {
-      // contract call
-      contract_id: string;
-      function_name: string;
-      function_args?: ClarityValue[];
-      sender: string;
-      fee: number;
-    }
+        // contract call
+        contract_id: string;
+        function_name: string;
+        function_args?: ClarityValue[];
+        sender: string;
+        fee: number;
+      }
     | {
-      // contract deploy
-      contract_name: string;
-      source_code: string;
-      deployer: string;
-      fee: number;
-      clarity_version: ClarityVersion;
-    }
+        // contract deploy
+        contract_name: string;
+        source_code: string;
+        deployer: string;
+        fee: number;
+        clarity_version: ClarityVersion;
+      }
     | {
-      // STX transfer
-      recipient: string;
-      amount: number;
-      sender: string;
-      fee: number;
-    }
+        // STX transfer
+        recipient: string;
+        amount: number;
+        sender: string;
+        fee: number;
+      }
     | SimulationEval
   )[] = [];
 
@@ -184,7 +214,7 @@ export class SimulationBuilder {
   public inlineSimulation(simulationId: string) {
     this.steps.push({
       simulationId,
-    })
+    });
     return this;
   }
   public addSTXTransfer(params: {
@@ -195,7 +225,7 @@ export class SimulationBuilder {
   }) {
     if (params.sender == null && this.sender === '') {
       throw new Error(
-        'Please specify a sender with useSender or adding a sender paramenter'
+        'Please specify a sender with useSender or adding a sender paramenter',
       );
     }
     this.steps.push({
@@ -214,7 +244,7 @@ export class SimulationBuilder {
   }) {
     if (params.sender == null && this.sender === '') {
       throw new Error(
-        'Please specify a sender with useSender or adding a sender paramenter'
+        'Please specify a sender with useSender or adding a sender paramenter',
       );
     }
     this.steps.push({
@@ -233,7 +263,7 @@ export class SimulationBuilder {
   }) {
     if (params.deployer == null && this.sender === '') {
       throw new Error(
-        'Please specify a deployer with useSender or adding a deployer paramenter'
+        'Please specify a deployer with useSender or adding a deployer paramenter',
       );
     }
     this.steps.push({
@@ -274,7 +304,7 @@ export class SimulationBuilder {
       this.block = stacks_tip_height;
     }
     const info: Block = await richFetch(
-      `${this.stacksNodeAPI}/extended/v1/block/by_height/${this.block}?unanchored=true`
+      `${this.stacksNodeAPI}/extended/v1/block/by_height/${this.block}?unanchored=true`,
     ).then((r) => r.json());
     if (
       info.height !== this.block ||
@@ -282,7 +312,7 @@ export class SimulationBuilder {
       !info.hash.startsWith('0x')
     ) {
       throw new Error(
-        `failed to get block info for block height ${this.block}`
+        `failed to get block info for block height ${this.block}`,
       );
     }
     return {
@@ -302,21 +332,22 @@ SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER
 
 Feedbacks and feature requests are welcome.
 To get in touch: contact@stxer.xyz
---------------------------------`
+--------------------------------`,
     );
     const block = await this.getBlockInfo();
     console.log(
-      `Using block height ${block.block_height} hash 0x${block.block_hash} to run simulation.`
+      `Using block height ${block.block_height} hash 0x${block.block_hash} to run simulation.`,
     );
     const txs: (StacksTransactionWire | SimulationEval)[] = [];
     const nonce_by_address = new Map<string, number>();
     const nextNonce = async (sender: string) => {
       const nonce = nonce_by_address.get(sender);
       if (nonce == null) {
-        const url = `${this.stacksNodeAPI
-          }/v2/accounts/${sender}?proof=${false}&tip=${block.index_block_hash}`;
+        const url = `${
+          this.stacksNodeAPI
+        }/v2/accounts/${sender}?proof=${false}&tip=${block.index_block_hash}`;
         const account: AccountDataResponse = await richFetch(url).then((r) =>
-          r.json()
+          r.json(),
         );
         nonce_by_address.set(sender, account.nonce + 1);
         return account.nonce;
@@ -336,7 +367,21 @@ To get in touch: contact@stxer.xyz
     }
     for (const step of this.steps) {
       if ('simulationId' in step) {
-        const previousSimulation: {steps: ({tx: string} | {code: string, contract: string})[]} = await fetch(`https://api.stxer.xyz/simulations/${step.simulationId}/request`).then(x => x.json())
+        const previousSimulation: {
+          steps: ({ tx: string } | { code: string; contract: string })[];
+        } = await fetch(
+          `https://api.stxer.xyz/simulations/${step.simulationId}/request`,
+        ).then(async (rs) => {
+          const body = await rs.text();
+          if (!body.startsWith('{')) {
+            throw new Error(
+              `failed to get simulation ${step.simulationId}: ${body}`,
+            );
+          }
+          return JSON.parse(body) as {
+            steps: ({ tx: string } | { code: string; contract: string })[];
+          };
+        });
         for (const step of previousSimulation.steps) {
           if ('tx' in step) {
             txs.push(deserializeTransaction(step.tx));
@@ -361,7 +406,7 @@ To get in touch: contact@stxer.xyz
           postConditionMode: PostConditionMode.Allow,
           fee: step.fee,
         });
-        tx.auth.spendingCondition.signer = c32addressDecode(step.sender)[1];
+        setSender(tx, step.sender);
         txs.push(tx);
       } else if ('sender' in step && 'recipient' in step) {
         const nonce = await nextNonce(step.sender);
@@ -373,7 +418,7 @@ To get in touch: contact@stxer.xyz
           publicKey: '',
           fee: step.fee,
         });
-        tx.auth.spendingCondition.signer = c32addressDecode(step.sender)[1];
+        setSender(tx, step.sender);
         txs.push(tx);
       } else if ('deployer' in step) {
         const nonce = await nextNonce(step.deployer);
@@ -386,28 +431,29 @@ To get in touch: contact@stxer.xyz
           postConditionMode: PostConditionMode.Allow,
           fee: step.fee,
         });
-        tx.auth.spendingCondition.signer = c32addressDecode(step.deployer)[1];
+        setSender(tx, step.deployer);
         txs.push(tx);
       } else if ('code' in step) {
         txs.push(step);
       } else {
-        // biome-ignore lint/style/noUnusedTemplateLiteral: <explanation>
-        console.log(`Invalid simulation step:`, step);
+        console.log(`Invalid simulation step: ${step}`);
       }
     }
     const id = await runSimulation(
       `${this.apiEndpoint}/simulations`,
       block.block_hash,
       block.block_height,
-      txs
+      txs,
     );
     console.log(
-      `Simulation will be available at: https://stxer.xyz/simulations/${this.network}/${id}`
+      `Simulation will be available at: https://stxer.xyz/simulations/${this.network}/${id}`,
     );
     return id;
   }
 
-  public pipe(transform: (builder: SimulationBuilder) => SimulationBuilder): SimulationBuilder {
+  public pipe(
+    transform: (builder: SimulationBuilder) => SimulationBuilder,
+  ): SimulationBuilder {
     return transform(this);
   }
 }

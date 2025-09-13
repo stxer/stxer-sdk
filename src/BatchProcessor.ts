@@ -7,8 +7,8 @@
 
 import {
   type ClarityValue,
-  type OptionalCV,
   contractPrincipalCV,
+  type OptionalCV,
 } from '@stacks/transactions';
 import { type BatchReads, batchRead } from './BatchAPI';
 
@@ -175,4 +175,4 @@ export class BatchProcessor {
       }
     }
   }
-} 
+}

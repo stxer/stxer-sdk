@@ -59,7 +59,7 @@ function convertResults(
 
 export async function batchRead(
   reads: BatchReads,
-  options: BatchApiOptions = {}
+  options: BatchApiOptions = {},
 ): Promise<BatchReadsResult> {
   const ibh =
     reads.index_block_hash == null
@@ -77,7 +77,10 @@ export async function batchRead(
 
   if (reads.variables != null) {
     for (const variable of reads.variables) {
-      payload.vars.push([serializeCV(variable.contract), variable.variableName]);
+      payload.vars.push([
+        serializeCV(variable.contract),
+        variable.variableName,
+      ]);
     }
   }
 
@@ -96,7 +99,7 @@ export async function batchRead(
       payload.readonly.push([
         serializeCV(ro.contract),
         ro.functionName,
-        ...ro.functionArgs.map(v => serializeCV(v)),
+        ...ro.functionArgs.map((v) => serializeCV(v)),
       ]);
     }
   }
