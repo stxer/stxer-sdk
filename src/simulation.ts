@@ -430,6 +430,7 @@ To get in touch: contact@stxer.xyz
           publicKey: '',
           postConditionMode: PostConditionMode.Allow,
           fee: step.fee,
+          clarityVersion: step.clarity_version
         });
         setSender(tx, step.deployer);
         txs.push(tx);
