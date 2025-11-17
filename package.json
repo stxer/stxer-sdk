@@ -1,6 +1,6 @@
 {
   "name": "stxer",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "license": "MIT",
   "author": "Kyle Fang",
   "repository": {
@@ -17,7 +17,7 @@
   "scripts": {
     "analyze": "size-limit --why",
     "build": "dts build",
-    "lint": "dts lint && biome check .",
+    "lint": "biome check .",
     "prepare": "dts build",
     "size": "size-limit",
     "start": "dts watch",
@@ -53,21 +53,21 @@
     }
   ],
   "devDependencies": {
-    "@biomejs/biome": "^2.2.4",
+    "@biomejs/biome": "^2.3.6",
     "@size-limit/preset-small-lib": "^11.2.0",
-    "@tsconfig/recommended": "^1.0.10",
-    "@types/node": "^24.3.3",
+    "@tsconfig/recommended": "^1.0.13",
+    "@types/node": "^24.10.1",
     "dts-cli": "^2.0.5",
     "husky": "^9.1.7",
     "size-limit": "^11.2.0",
     "tslib": "^2.8.1",
-    "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
     "@stacks/network": "^7.2.0",
     "@stacks/stacks-blockchain-api-types": "^7.14.1",
-    "@stacks/transactions": "^7.2.0",
+    "@stacks/transactions": "^7.3.0",
     "c32check": "^2.0.0",
     "clarity-abi": "^0.1.0",
     "ts-clarity": "^0.1.1"

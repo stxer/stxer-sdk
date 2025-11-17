@@ -270,7 +270,7 @@ export class SimulationBuilder {
       ...params,
       deployer: params.deployer ?? this.sender,
       fee: params.fee ?? 0,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity3,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
     });
     return this;
   }
