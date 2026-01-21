@@ -1,6 +1,6 @@
 # stxer SDK
 
-A powerful SDK for Stacks blockchain that provides batch operations and transaction simulation capabilities.
+A powerful SDK for Stacks blockchain that provides batch operations, transaction simulation, contract AST parsing, and chain tip information.
 
 ## Installation
 
@@ -12,7 +12,7 @@ yarn add stxer
 
 ## Features
 
-### 1. Transaction Simulation
+### 1. Transaction Simulation (V2 API)
 
 Simulate complex transaction sequences before executing them on-chain:
 
@@ -21,6 +21,7 @@ import { SimulationBuilder } from 'stxer';
 
 const simulationId = await SimulationBuilder.new({
   network: 'mainnet', // or 'testnet'
+  skipTracing: false, // Set to true for faster simulations without debug info
 })
   .withSender('ST...') // Set default sender
   .addContractCall({
@@ -41,7 +42,43 @@ const simulationId = await SimulationBuilder.new({
 // View simulation results at: https://stxer.xyz/simulations/{network}/{simulationId}
 ```
 
-### 2. Batch Operations
+### 2. Get Chain Tip
+
+Fetch the current chain tip information:
+
+```typescript
+import { getTip, type SidecarTip } from 'stxer';
+
+const tip: SidecarTip = await getTip();
+console.log(`Current block: ${tip.block_height}`);
+console.log(`Block hash: ${tip.block_hash}`);
+console.log(`Bitcoin height: ${tip.bitcoin_height}`);
+```
+
+### 3. Contract AST Operations
+
+Fetch or parse contract Abstract Syntax Trees:
+
+```typescript
+import { getContractAST, parseContract } from 'stxer';
+
+// Fetch on-chain contract AST
+const ast = await getContractAST({
+  contractId: 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.amm-pool-v2-01'
+});
+console.log(ast.source_code);
+console.log(ast.abi);
+
+// Parse local source code
+const parsed = await parseContract({
+  contractId: 'ST...contract-name',
+  sourceCode: '(define-public (hello) (ok "world"))',
+  clarityVersion: '4', // Optional: '1' | '2' | '3' | '4'
+  epoch: 'Epoch33' // Optional
+});
+```
+
+### 4. Batch Operations
 
 The SDK provides two approaches for efficient batch reading from the Stacks blockchain:
 
@@ -123,7 +160,7 @@ The BatchProcessor automatically:
 
 This is particularly useful when you need to make multiple blockchain reads and want to optimize network calls.
 
-### 3. Clarity API Utilities
+### 5. Clarity API Utilities
 
 The SDK provides convenient utilities for reading data from Clarity contracts:
 
@@ -168,6 +205,62 @@ const builder = SimulationBuilder.new({
   network: 'mainnet' // or 'testnet'
 });
 ```
+
+For `getTip` and AST operations:
+
+```typescript
+import { getTip, getContractAST, parseContract } from 'stxer';
+
+const tip = await getTip({
+  stxerApi: 'https://api.stxer.xyz' // Optional
+});
+
+const ast = await getContractAST({
+  contractId: 'SP...contract',
+  stxerApi: 'https://api.stxer.xyz' // Optional
+});
+```
+
+## Breaking Changes from Previous Version
+
+This version uses the **V2 Simulation API** which is incompatible with the previous V1 binary format:
+
+1. **SimulationBuilder** now uses JSON-based V2 API (`/devtools/v2/simulations`)
+2. **`inlineSimulation()`** is not yet supported in V2 - please run simulations from scratch
+3. New `skipTracing` option for faster simulations without debug information
+
+## API Reference
+
+### Simulation
+
+- `SimulationBuilder.new(options)` - Create a new simulation builder
+- `builder.useBlockHeight(height)` - Set block height for simulation
+- `builder.withSender(address)` - Set default sender address
+- `builder.addContractCall(params)` - Add a contract call step
+- `builder.addSTXTransfer(params)` - Add an STX transfer step
+- `builder.addContractDeploy(params)` - Add a contract deployment step
+- `builder.addEvalCode(contractId, code)` - Add arbitrary code evaluation
+- `builder.run()` - Execute the simulation
+
+### Chain Tip
+
+- `getTip(options?)` - Fetch current chain tip information
+
+### Contract AST
+
+- `getContractAST({ contractId, stxerApi? })` - Fetch on-chain contract AST
+- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` - Parse source code to AST
+
+### Batch Operations
+
+- `batchRead(reads, options?)` - Execute batch read operations
+- `new BatchProcessor({ stxerAPIEndpoint?, batchDelayMs })` - Create a batch processor
+
+### Clarity API
+
+- `callReadonly(params)` - Call a read-only contract function
+- `readVariable(params)` - Read a contract variable
+- `readMap(params)` - Read from a contract map
 
 ## Support
 
