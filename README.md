@@ -1,6 +1,6 @@
 # stxer SDK
 
-A powerful SDK for Stacks blockchain that provides batch operations, transaction simulation, contract AST parsing, and chain tip information.
+A powerful SDK for Stacks blockchain that provides transaction simulation, batch operations, contract AST parsing, and chain tip information.
 
 ## Installation
 
@@ -14,7 +14,9 @@ yarn add stxer
 
 ### 1. Transaction Simulation (V2 API)
 
-Simulate complex transaction sequences before executing them on-chain:
+Simulate complex transaction sequences before executing them on-chain. The SDK supports all V2 step types:
+
+#### Basic Simulation
 
 ```typescript
 import { SimulationBuilder } from 'stxer';
@@ -23,23 +25,117 @@ const simulationId = await SimulationBuilder.new({
   network: 'mainnet', // or 'testnet'
   skipTracing: false, // Set to true for faster simulations without debug info
 })
-  .withSender('ST...') // Set default sender
+  .useBlockHeight(130818) // Optional: use specific block height
+  .withSender('SP...') // Set default sender
   .addContractCall({
-    contract_id: 'ST...contract-name',
+    contract_id: 'SP...contract-name',
     function_name: 'my-function',
-    function_args: [/* clarity values */]
+    function_args: [/* clarity values */],
+    sender: 'SP...', // Optional: overrides default sender
+    fee: 100, // Optional: fee in microSTX
   })
   .addSTXTransfer({
-    recipient: 'ST...',
-    amount: 1000000 // in microSTX
+    recipient: 'SP...',
+    amount: 1000000, // in microSTX
   })
   .addContractDeploy({
     contract_name: 'my-contract',
-    source_code: '(define-public (hello) (ok "world"))'
+    source_code: '(define-public (hello) (ok "world"))',
+    deployer: 'SP...', // Optional: overrides default sender
+    clarity_version: 4, // Optional: Clarity1, Clarity2, Clarity3, or Clarity4
   })
   .run();
 
-// View simulation results at: https://stxer.xyz/simulations/{network}/{simulationId}
+// View simulation results at: https://stxer.xyz/simulations/mainnet/{simulationId}
+```
+
+#### Advanced V2 Step Types
+
+The SDK supports all V2 simulation step types:
+
+```typescript
+import { SimulationBuilder, ClarityVersion } from 'stxer';
+
+const simulationId = await SimulationBuilder.new()
+  .withSender('SP...')
+
+  // === Transaction Steps ===
+  // STX Transfer
+  .addSTXTransfer({ recipient: 'SP...', amount: 1000 })
+
+  // Contract Call
+  .addContractCall({
+    contract_id: 'SP...contract',
+    function_name: 'my-function',
+    function_args: [boolCV(true), uintCV(123)],
+  })
+
+  // Contract Deploy
+  .addContractDeploy({
+    contract_name: 'my-contract',
+    source_code: '(define-data-var counter uint u0)',
+    clarity_version: ClarityVersion.Clarity4,
+  })
+
+  // === Eval Steps ===
+  // Read state
+  .addEvalCode('SP...contract', '(var-get counter)')
+
+  // Modify state
+  .addEvalCode('SP...contract', '(var-set counter u100)')
+
+  // === SetContractCode Step ===
+  // Directly set contract code without a transaction
+  .addSetContractCode({
+    contract_id: 'SP...contract',
+    source_code: '(define-data-var enabled bool false)',
+    clarity_version: ClarityVersion.Clarity4,
+  })
+
+  // === Reads Batch Step ===
+  // Batch multiple read operations in a single step
+  .addReads([
+    { DataVar: ['SP...contract', 'counter'] },
+    { DataVar: ['SP...contract', 'enabled'] },
+    { StxBalance: 'SP...' },
+    { Nonce: 'SP...' },
+    { EvalReadonly: ['SP...', '', 'SP...contract', '(get-counter)'] },
+  ])
+
+  // === TenureExtend Step ===
+  // Extend tenure (resets execution cost)
+  .addTenureExtend()
+
+  .run();
+```
+
+#### Reads Batch Sub-Types
+
+The `Reads` step supports multiple read operation types:
+
+```typescript
+.addReads([
+  // Read a data variable
+  { DataVar: ['SP...contract', 'my-var'] },
+
+  // Read a map entry (key must be hex-encoded Clarity value)
+  { MapEntry: ['SP...contract', 'my-map', '0x0...'] },
+
+  // Call a read-only function
+  { EvalReadonly: ['SP...', '', 'SP...contract', '(my-function)'] },
+
+  // Read STX balance
+  { StxBalance: 'SP...' },
+
+  // Read fungible token balance
+  { FtBalance: ['SP...token-contract', 'token-name', 'SP...principal'] },
+
+  // Read fungible token supply
+  { FtSupply: ['SP...token-contract', 'token-name'] },
+
+  // Read account nonce
+  { Nonce: 'SP...' },
+])
 ```
 
 ### 2. Get Chain Tip
@@ -53,6 +149,7 @@ const tip: SidecarTip = await getTip();
 console.log(`Current block: ${tip.block_height}`);
 console.log(`Block hash: ${tip.block_hash}`);
 console.log(`Bitcoin height: ${tip.bitcoin_height}`);
+console.log(`Tenure cost: ${tip.tenure_cost}`);
 ```
 
 ### 3. Contract AST Operations
@@ -71,7 +168,7 @@ console.log(ast.abi);
 
 // Parse local source code
 const parsed = await parseContract({
-  contractId: 'ST...contract-name',
+  contractId: 'SP...contract-name',
   sourceCode: '(define-public (hello) (ok "world"))',
   clarityVersion: '4', // Optional: '1' | '2' | '3' | '4'
   epoch: 'Epoch33' // Optional
@@ -203,6 +300,7 @@ const builder = SimulationBuilder.new({
   apiEndpoint: 'https://api.stxer.xyz', // Default stxer API endpoint
   stacksNodeAPI: 'https://api.hiro.so', // Default Stacks API endpoint
   network: 'mainnet' // or 'testnet'
+  skipTracing: false, // Set to true for faster simulations (no debug UI support)
 });
 ```
 
@@ -221,14 +319,6 @@ const ast = await getContractAST({
 });
 ```
 
-## Breaking Changes from Previous Version
-
-This version uses the **V2 Simulation API** which is incompatible with the previous V1 binary format:
-
-1. **SimulationBuilder** now uses JSON-based V2 API (`/devtools/v2/simulations`)
-2. **`inlineSimulation()`** is not yet supported in V2 - please run simulations from scratch
-3. New `skipTracing` option for faster simulations without debug information
-
 ## API Reference
 
 ### Simulation
@@ -236,11 +326,20 @@ This version uses the **V2 Simulation API** which is incompatible with the previ
 - `SimulationBuilder.new(options)` - Create a new simulation builder
 - `builder.useBlockHeight(height)` - Set block height for simulation
 - `builder.withSender(address)` - Set default sender address
+
+**Transaction Steps:**
 - `builder.addContractCall(params)` - Add a contract call step
 - `builder.addSTXTransfer(params)` - Add an STX transfer step
 - `builder.addContractDeploy(params)` - Add a contract deployment step
-- `builder.addEvalCode(contractId, code)` - Add arbitrary code evaluation
-- `builder.run()` - Execute the simulation
+
+**V2 Step Types:**
+- `builder.addEvalCode(contractId, code)` - Add arbitrary code evaluation (with state modification)
+- `builder.addSetContractCode(params)` - Directly set contract code without transaction
+- `builder.addReads(reads[])` - Batch read operations in a single step
+- `builder.addTenureExtend()` - Extend tenure (resets execution cost)
+
+**Execution:**
+- `builder.run()` - Execute the simulation and return simulation ID
 
 ### Chain Tip
 
