@@ -1,6 +1,6 @@
 # stxer SDK
 
-A powerful SDK for Stacks blockchain that provides batch operations and transaction simulation capabilities.
+A powerful SDK for Stacks blockchain that provides transaction simulation, batch operations, contract AST parsing, and chain tip information.
 
 ## Installation
 
@@ -12,36 +12,252 @@ yarn add stxer
 
 ## Features
 
-### 1. Transaction Simulation
+### 1. Transaction Simulation (V2 API)
 
-Simulate complex transaction sequences before executing them on-chain:
+Simulate complex transaction sequences before executing them on-chain. The SDK supports all V2 step types:
+
+#### Basic Simulation
 
 ```typescript
 import { SimulationBuilder } from 'stxer';
 
 const simulationId = await SimulationBuilder.new({
   network: 'mainnet', // or 'testnet'
+  skipTracing: false, // Set to true for faster simulations without debug info
 })
-  .withSender('ST...') // Set default sender
+  .useBlockHeight(130818) // Optional: use specific block height
+  .withSender('SP...') // Set default sender
   .addContractCall({
-    contract_id: 'ST...contract-name',
+    contract_id: 'SP...contract-name',
     function_name: 'my-function',
-    function_args: [/* clarity values */]
+    function_args: [/* clarity values */],
+    sender: 'SP...', // Optional: overrides default sender
+    fee: 100, // Optional: fee in microSTX
   })
   .addSTXTransfer({
-    recipient: 'ST...',
-    amount: 1000000 // in microSTX
+    recipient: 'SP...',
+    amount: 1000000, // in microSTX
   })
   .addContractDeploy({
     contract_name: 'my-contract',
-    source_code: '(define-public (hello) (ok "world"))'
+    source_code: '(define-public (hello) (ok "world"))',
+    deployer: 'SP...', // Optional: overrides default sender
+    clarity_version: 4, // Optional: Clarity1, Clarity2, Clarity3, or Clarity4
   })
   .run();
 
-// View simulation results at: https://stxer.xyz/simulations/{network}/{simulationId}
+// View simulation results at: https://stxer.xyz/simulations/mainnet/{simulationId}
 ```
 
-### 2. Batch Operations
+#### Advanced V2 Step Types
+
+The SDK supports all V2 simulation step types:
+
+```typescript
+import { SimulationBuilder, ClarityVersion } from 'stxer';
+
+const simulationId = await SimulationBuilder.new()
+  .withSender('SP...')
+
+  // === Transaction Steps ===
+  // STX Transfer
+  .addSTXTransfer({ recipient: 'SP...', amount: 1000 })
+
+  // Contract Call
+  .addContractCall({
+    contract_id: 'SP...contract',
+    function_name: 'my-function',
+    function_args: [boolCV(true), uintCV(123)],
+  })
+
+  // Contract Deploy
+  .addContractDeploy({
+    contract_name: 'my-contract',
+    source_code: '(define-data-var counter uint u0)',
+    clarity_version: ClarityVersion.Clarity4,
+  })
+
+  // === Eval Steps ===
+  // Read state
+  .addEvalCode('SP...contract', '(var-get counter)')
+
+  // Modify state
+  .addEvalCode('SP...contract', '(var-set counter u100)')
+
+  // === SetContractCode Step ===
+  // Directly set contract code without a transaction
+  .addSetContractCode({
+    contract_id: 'SP...contract',
+    source_code: '(define-data-var enabled bool false)',
+    clarity_version: ClarityVersion.Clarity4,
+  })
+
+  // === Reads Batch Step ===
+  // Batch multiple read operations in a single step
+  .addReads([
+    { DataVar: ['SP...contract', 'counter'] },
+    { DataVar: ['SP...contract', 'enabled'] },
+    { StxBalance: 'SP...' },
+    { Nonce: 'SP...' },
+    { EvalReadonly: ['SP...', '', 'SP...contract', '(get-counter)'] },
+  ])
+
+  // === TenureExtend Step ===
+  // Extend tenure (resets execution cost)
+  .addTenureExtend()
+
+  .run();
+```
+
+#### Reads Batch Sub-Types
+
+The `Reads` step supports multiple read operation types:
+
+```typescript
+.addReads([
+  // Read a data variable
+  { DataVar: ['SP...contract', 'my-var'] },
+
+  // Read a map entry (key must be hex-encoded Clarity value)
+  { MapEntry: ['SP...contract', 'my-map', '0x0...'] },
+
+  // Call a read-only function
+  { EvalReadonly: ['SP...', '', 'SP...contract', '(my-function)'] },
+
+  // Read STX balance
+  { StxBalance: 'SP...' },
+
+  // Read fungible token balance
+  { FtBalance: ['SP...token-contract', 'token-name', 'SP...principal'] },
+
+  // Read fungible token supply
+  { FtSupply: ['SP...token-contract', 'token-name'] },
+
+  // Read account nonce
+  { Nonce: 'SP...' },
+])
+```
+
+### 2. Programmatic Simulation APIs
+
+For advanced use cases where you need more control than `SimulationBuilder` provides, the SDK exposes low-level programmatic APIs that directly map to the stxer V2 simulation endpoints.
+
+#### Instant Simulation
+
+Simulate a single transaction without creating a session. Useful for apps/wallets to preview transaction results before sending:
+
+```typescript
+import { instantSimulation } from 'stxer';
+
+const result = await instantSimulation({
+  transaction: '0x...', // Hex-encoded transaction
+  reads: [
+    { DataVar: ['SP...contract', 'my-var'] },
+    { StxBalance: 'SP...' }
+  ]
+});
+
+console.log(result.receipt.result); // Transaction result
+console.log(result.reads); // Optional read results
+```
+
+#### Session-Based Simulation
+
+For more complex scenarios with multiple steps:
+
+```typescript
+import {
+  createSimulationSession,
+  submitSimulationSteps,
+  getSimulationResult,
+  simulationBatchReads
+} from 'stxer';
+
+// 1. Create a simulation session
+const sessionId = await createSimulationSession({
+  skip_tracing: false // Set to true for faster simulations
+});
+
+// 2. Submit steps to the session
+const stepResults = await submitSimulationSteps(sessionId, {
+  steps: [
+    { Transaction: '0x...' },
+    { Eval: ['SP...', '', 'SP...contract', '(var-get my-var)'] },
+    { SetContractCode: ['SP...contract', '(define-data-var x uint u0)', 4] },
+    { Reads: [
+      { DataVar: ['SP...contract', 'my-var'] },
+      { StxBalance: 'SP...' }
+    ]},
+    { TenureExtend: [] }
+  ]
+});
+
+console.log(`Executed ${stepResults.steps.length} steps`);
+
+// 3. Get full simulation results
+const result = await getSimulationResult(sessionId);
+console.log(result.metadata);
+console.log(result.steps);
+
+// 4. Batch reads from simulation state
+const reads = await simulationBatchReads(sessionId, {
+  vars: [['SP...contract', 'my-var']],
+  maps: [['SP...contract', 'my-map', '0x...']],
+  stx: ['SP...']
+});
+console.log(reads.vars);
+console.log(reads.stx);
+```
+
+#### API Options
+
+All programmatic APIs accept an optional `stxerApi` parameter to customize the endpoint:
+
+```typescript
+const sessionId = await createSimulationSession(
+  { skip_tracing: true },
+  { stxerApi: 'https://testnet-api.stxer.xyz' }
+);
+```
+
+### 3. Get Chain Tip
+
+Fetch the current chain tip information:
+
+```typescript
+import { getTip, type SidecarTip } from 'stxer';
+
+const tip: SidecarTip = await getTip();
+console.log(`Current block: ${tip.block_height}`);
+console.log(`Block hash: ${tip.block_hash}`);
+console.log(`Bitcoin height: ${tip.bitcoin_height}`);
+console.log(`Tenure cost: ${tip.tenure_cost}`);
+```
+
+### 4. Contract AST Operations
+
+Fetch or parse contract Abstract Syntax Trees:
+
+```typescript
+import { getContractAST, parseContract } from 'stxer';
+
+// Fetch on-chain contract AST
+const ast = await getContractAST({
+  contractId: 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.amm-pool-v2-01'
+});
+console.log(ast.source_code);
+console.log(ast.abi);
+
+// Parse local source code
+const parsed = await parseContract({
+  contractId: 'SP...contract-name',
+  sourceCode: '(define-public (hello) (ok "world"))',
+  clarityVersion: '4', // Optional: '1' | '2' | '3' | '4'
+  epoch: 'Epoch33' // Optional
+});
+```
+
+### 5. Batch Operations
 
 The SDK provides two approaches for efficient batch reading from the Stacks blockchain:
 
@@ -123,7 +339,7 @@ The BatchProcessor automatically:
 
 This is particularly useful when you need to make multiple blockchain reads and want to optimize network calls.
 
-### 3. Clarity API Utilities
+### 6. Clarity API Utilities
 
 The SDK provides convenient utilities for reading data from Clarity contracts:
 
@@ -159,15 +375,105 @@ These utilities provide type-safe ways to interact with Clarity contracts, with 
 
 ## Configuration
 
-You can customize the API endpoints:
+### API Endpoint Constants
+
+The SDK exports constants for stxer API endpoints:
 
 ```typescript
+import { STXER_API_MAINNET, STXER_API_TESTNET } from 'stxer';
+
+console.log(STXER_API_MAINNET); // https://api.stxer.xyz
+console.log(STXER_API_TESTNET); // https://testnet-api.stxer.xyz
+```
+
+### Customizing API Endpoints
+
+You can customize the API endpoints for all operations:
+
+```typescript
+import { SimulationBuilder, STXER_API_TESTNET } from 'stxer';
+
 const builder = SimulationBuilder.new({
-  apiEndpoint: 'https://api.stxer.xyz', // Default stxer API endpoint
-  stacksNodeAPI: 'https://api.hiro.so', // Default Stacks API endpoint
-  network: 'mainnet' // or 'testnet'
+  apiEndpoint: STXER_API_TESTNET, // Use testnet
+  stacksNodeAPI: 'https://api.testnet.hiro.so', // Testnet Stacks API
+  network: 'testnet',
+  skipTracing: false, // Set to true for faster simulations (no debug UI support)
 });
 ```
+
+For `getTip` and AST operations:
+
+```typescript
+import { getTip, getContractAST, parseContract, STXER_API_MAINNET } from 'stxer';
+
+const tip = await getTip({
+  stxerApi: STXER_API_MAINNET // Optional, defaults to mainnet
+});
+
+const ast = await getContractAST({
+  contractId: 'SP...contract',
+  stxerApi: STXER_API_MAINNET // Optional
+});
+```
+
+## API Reference
+
+### Constants
+
+- `STXER_API_MAINNET` - Mainnet API endpoint (https://api.stxer.xyz)
+- `STXER_API_TESTNET` - Testnet API endpoint (https://testnet-api.stxer.xyz)
+- `DEFAULT_STXER_API` - Default API endpoint (same as STXER_API_MAINNET)
+
+### Simulation Builder (High-Level)
+
+- `SimulationBuilder.new(options)` - Create a new simulation builder
+- `builder.useBlockHeight(height)` - Set block height for simulation
+- `builder.withSender(address)` - Set default sender address
+
+**Transaction Steps:**
+- `builder.addContractCall(params)` - Add a contract call step
+- `builder.addSTXTransfer(params)` - Add an STX transfer step
+- `builder.addContractDeploy(params)` - Add a contract deployment step
+
+**V2 Step Types:**
+- `builder.addEvalCode(contractId, code)` - Add arbitrary code evaluation (with state modification)
+- `builder.addSetContractCode(params)` - Directly set contract code without transaction
+- `builder.addReads(reads[])` - Batch read operations in a single step
+- `builder.addTenureExtend()` - Extend tenure (resets execution cost)
+
+**Execution:**
+- `builder.run()` - Execute the simulation and return simulation ID
+
+### Programmatic Simulation APIs (Low-Level)
+
+**Instant Simulation:**
+- `instantSimulation(request, options?)` - Simulate a single transaction without session
+
+**Session Management:**
+- `createSimulationSession(options?, apiOptions?)` - Create a new simulation session
+- `submitSimulationSteps(sessionId, request, options?)` - Submit steps to a session
+- `getSimulationResult(sessionId, options?)` - Get full simulation results
+- `simulationBatchReads(sessionId, request, options?)` - Batch reads from simulation state
+
+### Chain Tip
+
+- `getTip(options?)` - Fetch current chain tip information
+
+### Contract AST
+
+- `getContractAST({ contractId, stxerApi? })` - Fetch on-chain contract AST
+- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` - Parse source code to AST
+
+### Batch Operations
+
+- `batchRead(reads, options?)` - Execute batch read operations
+- `new BatchProcessor({ stxerAPIEndpoint?, batchDelayMs })` - Create a batch processor
+
+### Clarity API
+
+- `callReadonly(params)` - Call a read-only contract function
+- `readVariable(params)` - Read a contract variable
+- `readMap(params)` - Read from a contract map
 
 ## Support
 

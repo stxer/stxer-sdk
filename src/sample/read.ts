@@ -6,8 +6,8 @@ import {
 } from '@stacks/transactions';
 import { SIP010TraitABI } from 'clarity-abi/abis';
 import { unwrapResponse } from 'ts-clarity';
-import { batchRead } from '../BatchAPI';
-import { BatchProcessor } from '../BatchProcessor';
+import { batchRead } from '../batch-api';
+import { BatchProcessor } from '../batch-processor';
 import { callReadonly, readMap, readVariable } from '../clarity-api';
 
 async function batchReadsExample() {

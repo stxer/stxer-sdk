@@ -19,7 +19,7 @@ import type {
   InferVariableType,
 } from 'ts-clarity';
 import { decodeAbi, encodeAbi } from 'ts-clarity';
-import { BatchProcessor } from './BatchProcessor';
+import { BatchProcessor } from './batch-processor';
 
 // Shared processor instance with default settings
 const defaultProcessor = new BatchProcessor({

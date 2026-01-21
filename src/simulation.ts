@@ -7,24 +7,23 @@ import {
 import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
   AddressHashMode,
-  bufferCV,
   type ClarityValue,
   ClarityVersion,
-  contractPrincipalCV,
-  deserializeTransaction,
   type MultiSigSpendingCondition,
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
   PostConditionMode,
   type StacksTransactionWire,
-  serializeCVBytes,
-  stringAsciiCV,
-  tupleCV,
-  uintCV,
 } from '@stacks/transactions';
 import { c32addressDecode } from 'c32check';
 import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
+import { STXER_API_MAINNET, STXER_API_TESTNET } from './constants';
+import {
+  createSimulationSession,
+  submitSimulationSteps,
+} from './simulation-api';
+import type { ReadStep, SimulationStepInput } from './types';
 
 function setSender(tx: StacksTransactionWire, sender: string) {
   const [addressVersion, signer] = c32addressDecode(sender);
@@ -51,107 +50,23 @@ function setSender(tx: StacksTransactionWire, sender: string) {
   return tx;
 }
 
-function runTx(tx: StacksTransactionWire) {
-  // type 0: run transaction
-  return tupleCV({ type: uintCV(0), data: bufferCV(tx.serializeBytes()) });
-}
-
 export interface SimulationEval {
   contract_id: string;
   code: string;
-}
-
-export function runEval({ contract_id, code }: SimulationEval) {
-  const [contract_address, contract_name] = contract_id.split('.');
-  // type 1: eval arbitrary code inside a contract
-  return tupleCV({
-    type: uintCV(1),
-    data: bufferCV(
-      serializeCVBytes(
-        tupleCV({
-          contract: contractPrincipalCV(contract_address, contract_name),
-          code: stringAsciiCV(code),
-        }),
-      ),
-    ),
-  });
-}
-
-export async function runSimulation(
-  apiEndpoint: string,
-  block_hash: string,
-  block_height: number,
-  txs: (StacksTransactionWire | SimulationEval)[],
-) {
-  // Convert 'sim-v1' to Uint8Array
-  const header = new TextEncoder().encode('sim-v1');
-  // Create 8 bytes for block height
-  const heightBytes = new Uint8Array(8);
-  // Convert block height to bytes
-  const view = new DataView(heightBytes.buffer);
-  view.setBigUint64(0, BigInt(block_height), false); // false for big-endian
-
-  // Convert block hash to bytes
-  const hashHex = block_hash.startsWith('0x')
-    ? block_hash.substring(2)
-    : block_hash;
-  // Replace non-null assertion with null check
-  const matches = hashHex.match(/.{1,2}/g);
-  if (!matches) {
-    throw new Error('Invalid block hash format');
-  }
-  const hashBytes = new Uint8Array(
-    matches.map((byte) => Number.parseInt(byte, 16)),
-  );
-
-  // Convert transactions to bytes
-  const txBytes = txs
-    .map((t) => ('contract_id' in t && 'code' in t ? runEval(t) : runTx(t)))
-    .map((t) => serializeCVBytes(t));
-
-  // Combine all byte arrays
-  const totalLength =
-    header.length +
-    heightBytes.length +
-    hashBytes.length +
-    txBytes.reduce((acc, curr) => acc + curr.length, 0);
-  const body = new Uint8Array(totalLength);
-
-  let offset = 0;
-  body.set(header, offset);
-  offset += header.length;
-  body.set(heightBytes, offset);
-  offset += heightBytes.length;
-  body.set(hashBytes, offset);
-  offset += hashBytes.length;
-  for (const tx of txBytes) {
-    body.set(tx, offset);
-    offset += tx.length;
-  }
-
-  const rs = await fetch(apiEndpoint, {
-    method: 'POST',
-    body,
-  }).then(async (rs) => {
-    const response = await rs.text();
-    if (!response.startsWith('{')) {
-      throw new Error(`failed to submit simulation: ${response}`);
-    }
-    return JSON.parse(response) as { id: string };
-  });
-  return rs.id;
 }
 
 interface SimulationBuilderOptions {
   apiEndpoint?: string;
   stacksNodeAPI?: string;
   network?: StacksNetworkName | string;
+  skipTracing?: boolean;
 }
 
 export class SimulationBuilder {
   private apiEndpoint: string;
   private stacksNodeAPI: string;
   private network: StacksNetworkName | string;
+  private skipTracing: boolean;
 
   private constructor(options: SimulationBuilderOptions = {}) {
     this.network = options.network ?? 'mainnet';
@@ -159,10 +74,11 @@ export class SimulationBuilder {
 
     this.apiEndpoint =
       options.apiEndpoint ??
-      (isTestnet ? 'https://testnet-api.stxer.xyz' : 'https://api.stxer.xyz');
+      (isTestnet ? STXER_API_TESTNET : STXER_API_MAINNET);
     this.stacksNodeAPI =
       options.stacksNodeAPI ??
       (isTestnet ? 'https://api.testnet.hiro.so' : 'https://api.hiro.so');
+    this.skipTracing = options.skipTracing ?? false;
   }
 
   public static new(options?: SimulationBuilderOptions) {
@@ -174,7 +90,7 @@ export class SimulationBuilder {
   private sender = '';
   private steps: (
     | {
-        // inline simulation
+        // inline simulation (V1 - not supported in V2, but kept for potential future support)
         simulationId: string;
       }
     | {
@@ -201,22 +117,41 @@ export class SimulationBuilder {
         fee: number;
       }
     | SimulationEval
+    | {
+        // SetContractCode - V2 native step type
+        type: 'SetContractCode';
+        contract_id: string;
+        source_code: string;
+        clarity_version: ClarityVersion;
+      }
+    | {
+        // Reads - V2 native batch reads step type
+        type: 'Reads';
+        reads: ReadStep[];
+      }
+    | {
+        // TenureExtend - V2 native step type
+        type: 'TenureExtend';
+      }
   )[] = [];
 
   public useBlockHeight(block: number) {
     this.block = block;
     return this;
   }
+
   public withSender(address: string) {
     this.sender = address;
     return this;
   }
+
   public inlineSimulation(simulationId: string) {
     this.steps.push({
       simulationId,
     });
     return this;
   }
+
   public addSTXTransfer(params: {
     recipient: string;
     amount: number;
@@ -235,6 +170,7 @@ export class SimulationBuilder {
     });
     return this;
   }
+
   public addContractCall(params: {
     contract_id: string;
     function_name: string;
@@ -254,6 +190,7 @@ export class SimulationBuilder {
     });
     return this;
   }
+
   public addContractDeploy(params: {
     contract_name: string;
     source_code: string;
@@ -274,6 +211,7 @@ export class SimulationBuilder {
     });
     return this;
   }
+
   public addEvalCode(inside_contract_id: string, code: string) {
     this.steps.push({
       contract_id: inside_contract_id,
@@ -281,6 +219,7 @@ export class SimulationBuilder {
     });
     return this;
   }
+
   public addMapRead(contract_id: string, map: string, key: string) {
     this.steps.push({
       contract_id,
@@ -288,10 +227,40 @@ export class SimulationBuilder {
     });
     return this;
   }
+
   public addVarRead(contract_id: string, variable: string) {
     this.steps.push({
       contract_id,
       code: `(var-get ${variable})`,
+    });
+    return this;
+  }
+
+  public addSetContractCode(params: {
+    contract_id: string;
+    source_code: string;
+    clarity_version?: ClarityVersion;
+  }) {
+    this.steps.push({
+      type: 'SetContractCode',
+      contract_id: params.contract_id,
+      source_code: params.source_code,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
+    });
+    return this;
+  }
+
+  public addReads(reads: ReadStep[]) {
+    this.steps.push({
+      type: 'Reads',
+      reads,
+    });
+    return this;
+  }
+
+  public addTenureExtend() {
+    this.steps.push({
+      type: 'TenureExtend',
     });
     return this;
   }
@@ -322,7 +291,7 @@ export class SimulationBuilder {
     };
   }
 
-  public async run() {
+  public async run(): Promise<string> {
     console.log(
       `--------------------------------
 This product can never exist without your support!
@@ -338,7 +307,8 @@ To get in touch: contact@stxer.xyz
     console.log(
       `Using block height ${block.block_height} hash 0x${block.block_hash} to run simulation.`,
     );
-    const txs: (StacksTransactionWire | SimulationEval)[] = [];
+
+    const v2Steps: SimulationStepInput[] = [];
     const nonce_by_address = new Map<string, number>();
     const nextNonce = async (sender: string) => {
       const nonce = nonce_by_address.get(sender);
@@ -355,6 +325,7 @@ To get in touch: contact@stxer.xyz
       nonce_by_address.set(sender, nonce + 1);
       return nonce;
     };
+
     let network = this.network === 'mainnet' ? STACKS_MAINNET : STACKS_TESTNET;
     if (this.stacksNodeAPI) {
       network = {
@@ -365,39 +336,21 @@ To get in touch: contact@stxer.xyz
         },
       };
     }
+
     for (const step of this.steps) {
       if ('simulationId' in step) {
-        const previousSimulation: {
-          steps: ({ tx: string } | { code: string; contract: string })[];
-        } = await fetch(
-          `https://api.stxer.xyz/simulations/${step.simulationId}/request`,
-        ).then(async (rs) => {
-          const body = await rs.text();
-          if (!body.startsWith('{')) {
-            throw new Error(
-              `failed to get simulation ${step.simulationId}: ${body}`,
-            );
-          }
-          return JSON.parse(body) as {
-            steps: ({ tx: string } | { code: string; contract: string })[];
-          };
-        });
-        for (const step of previousSimulation.steps) {
-          if ('tx' in step) {
-            txs.push(deserializeTransaction(step.tx));
-          } else if ('code' in step && 'contract' in step) {
-            txs.push({
-              contract_id: step.contract,
-              code: step.code,
-            });
-          }
-        }
-      } else if ('sender' in step && 'function_name' in step) {
+        // Inline simulation - for V2 we would need to fetch the previous simulation
+        // and convert its steps to V2 format. This is complex and may not be
+        // commonly used, so for now we'll throw an error.
+        throw new Error(
+          'inlineSimulation is not yet supported in V2 API. Please run simulations from scratch.',
+        );
+      }
+      if ('sender' in step && 'function_name' in step) {
         const nonce = await nextNonce(step.sender);
-        const [contractAddress, contractName] = step.contract_id.split('.');
         const tx = await makeUnsignedContractCall({
-          contractAddress,
-          contractName,
+          contractAddress: step.contract_id.split('.')[0] as string,
+          contractName: step.contract_id.split('.')[1] as string,
           functionName: step.function_name,
           functionArgs: step.function_args ?? [],
           nonce,
@@ -407,7 +360,7 @@ To get in touch: contact@stxer.xyz
           fee: step.fee,
         });
         setSender(tx, step.sender);
-        txs.push(tx);
+        v2Steps.push({ Transaction: bytesToHex(tx.serializeBytes()) });
       } else if ('sender' in step && 'recipient' in step) {
         const nonce = await nextNonce(step.sender);
         const tx = await makeUnsignedSTXTokenTransfer({
@@ -419,7 +372,7 @@ To get in touch: contact@stxer.xyz
           fee: step.fee,
         });
         setSender(tx, step.sender);
-        txs.push(tx);
+        v2Steps.push({ Transaction: bytesToHex(tx.serializeBytes()) });
       } else if ('deployer' in step) {
         const nonce = await nextNonce(step.deployer);
         const tx = await makeUnsignedContractDeploy({
@@ -430,26 +383,67 @@ To get in touch: contact@stxer.xyz
           publicKey: '',
           postConditionMode: PostConditionMode.Allow,
           fee: step.fee,
-          clarityVersion: step.clarity_version
+          clarityVersion: step.clarity_version,
         });
         setSender(tx, step.deployer);
-        txs.push(tx);
+        v2Steps.push({ Transaction: bytesToHex(tx.serializeBytes()) });
       } else if ('code' in step) {
-        txs.push(step);
+        // Eval step - format: [sender, sponsor, contract_id, code]
+        // For eval without a sender, we use empty string for sponsor
+        const [contractAddress, contractName] = step.contract_id.split('.');
+        v2Steps.push({
+          Eval: [
+            this.sender || contractAddress,
+            '',
+            `${contractAddress}.${contractName}`,
+            step.code,
+          ],
+        });
+      } else if (step.type === 'SetContractCode') {
+        // SetContractCode - format: [contract_id, code, clarity_version]
+        v2Steps.push({
+          SetContractCode: [
+            step.contract_id,
+            step.source_code,
+            clarityVersionToNumber(step.clarity_version),
+          ],
+        });
+      } else if (step.type === 'Reads') {
+        // Reads - batch read operations
+        v2Steps.push({
+          Reads: step.reads,
+        });
+      } else if (step.type === 'TenureExtend') {
+        // TenureExtend - format: []
+        v2Steps.push({
+          TenureExtend: [],
+        });
       } else {
         console.log(`Invalid simulation step: ${step}`);
       }
     }
-    const id = await runSimulation(
-      `${this.apiEndpoint}/simulations`,
-      block.block_hash,
-      block.block_height,
-      txs,
+
+    // Create V2 simulation session
+    const simulationId = await createSimulationSession(
+      {
+        block_height: block.block_height,
+        block_hash: block.block_hash,
+        skip_tracing: this.skipTracing,
+      },
+      { stxerApi: this.apiEndpoint },
     );
+
+    // Submit steps
+    await submitSimulationSteps(
+      simulationId,
+      { steps: v2Steps },
+      { stxerApi: this.apiEndpoint },
+    );
+
     console.log(
-      `Simulation will be available at: https://stxer.xyz/simulations/${this.network}/${id}`,
+      `Simulation will be available at: https://stxer.xyz/simulations/${this.network}/${simulationId}`,
     );
-    return id;
+    return simulationId;
   }
 
   public pipe(
@@ -458,3 +452,40 @@ To get in touch: contact@stxer.xyz
     return transform(this);
   }
 }
+
+// Helper function to convert Uint8Array to hex string
+function bytesToHex(bytes: Uint8Array): string {
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// Helper function to convert ClarityVersion to number
+function clarityVersionToNumber(version: ClarityVersion): number {
+  switch (version) {
+    case ClarityVersion.Clarity1:
+      return 1;
+    case ClarityVersion.Clarity2:
+      return 2;
+    case ClarityVersion.Clarity3:
+      return 3;
+    case ClarityVersion.Clarity4:
+      return 4;
+    default:
+      return 4;
+  }
+}
+
+// Re-export simulation types
+export type {
+  CreateSimulationRequest,
+  ExecutionCost,
+  InstantSimulationRequest,
+  InstantSimulationResponse,
+  ReadResult,
+  ReadStep,
+  SimulationMetadata,
+  SimulationResult,
+  SimulationStepInput,
+  TransactionReceipt,
+} from './types';
