@@ -348,7 +348,9 @@ export interface SubmitSimulationStepsRequest {
   steps: SimulationStepInput[];
 }
 
-export type SubmitSimulationStepsResponse = SimulationStepSummary[];
+export interface SubmitSimulationStepsResponse {
+  steps: SimulationStepSummary[];
+}
 
 // Batch reads from simulation
 export interface SimulationBatchReadsRequest {
@@ -362,7 +364,7 @@ export interface SimulationBatchReadsRequest {
   stx?: string[]; // principals
   nonces?: string[]; // principals
   ft_balance?: [string, string][]; // [token_identifier, principal]
-  ft_supply?: [string, string][]; // [token_identifier, token_identifier]
+  ft_supply?: [string, string][]; // [contract_id, ft_token_name]
 }
 
 export interface SimulationBatchReadsResponse {

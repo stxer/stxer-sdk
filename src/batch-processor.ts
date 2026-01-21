@@ -10,7 +10,7 @@ import {
   contractPrincipalCV,
   type OptionalCV,
 } from '@stacks/transactions';
-import { type BatchReads, batchRead } from './BatchAPI';
+import { type BatchReads, batchRead } from './batch-api';
 
 export interface ReadOnlyRequest {
   mode: 'readonly';

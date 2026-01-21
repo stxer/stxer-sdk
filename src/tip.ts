@@ -5,9 +5,8 @@
  * so please be careful when adding `import`s to it.
  */
 
+import { DEFAULT_STXER_API } from './constants';
 import type { SidecarTip } from './types';
-
-const DEFAULT_STXER_API = 'https://api.stxer.xyz';
 
 export interface TipOptions {
   stxerApi?: string;

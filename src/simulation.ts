@@ -18,13 +18,12 @@ import {
 } from '@stacks/transactions';
 import { c32addressDecode } from 'c32check';
 import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
-import type {
-  CreateSimulationRequest,
-  ReadStep,
-  SimulationStepInput,
-} from './types';
-
-const DEFAULT_STXER_API = 'https://api.stxer.xyz';
+import { STXER_API_MAINNET, STXER_API_TESTNET } from './constants';
+import {
+  createSimulationSession,
+  submitSimulationSteps,
+} from './simulation-api';
+import type { ReadStep, SimulationStepInput } from './types';
 
 function setSender(tx: StacksTransactionWire, sender: string) {
   const [addressVersion, signer] = c32addressDecode(sender);
@@ -75,7 +74,7 @@ export class SimulationBuilder {
 
     this.apiEndpoint =
       options.apiEndpoint ??
-      (isTestnet ? 'https://testnet-api.stxer.xyz' : DEFAULT_STXER_API);
+      (isTestnet ? STXER_API_TESTNET : STXER_API_MAINNET);
     this.stacksNodeAPI =
       options.stacksNodeAPI ??
       (isTestnet ? 'https://api.testnet.hiro.so' : 'https://api.hiro.so');
@@ -425,50 +424,21 @@ To get in touch: contact@stxer.xyz
     }
 
     // Create V2 simulation session
-    const createRequest: CreateSimulationRequest = {
-      block_height: block.block_height,
-      block_hash: block.block_hash,
-      skip_tracing: this.skipTracing,
-    };
-
-    const createResponse = await fetch(
-      `${this.apiEndpoint}/devtools/v2/simulations`,
+    const simulationId = await createSimulationSession(
       {
-        method: 'POST',
-        body: JSON.stringify(createRequest),
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
+        block_height: block.block_height,
+        block_hash: block.block_hash,
+        skip_tracing: this.skipTracing,
       },
+      { stxerApi: this.apiEndpoint },
     );
-
-    if (!createResponse.ok) {
-      const text = await createResponse.text();
-      throw new Error(`Failed to create simulation: ${text}`);
-    }
-
-    const { id: simulationId } = (await createResponse.json()) as {
-      id: string;
-    };
 
     // Submit steps
-    const stepsResponse = await fetch(
-      `${this.apiEndpoint}/devtools/v2/simulations/${simulationId}`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ steps: v2Steps }),
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-        },
-      },
+    await submitSimulationSteps(
+      simulationId,
+      { steps: v2Steps },
+      { stxerApi: this.apiEndpoint },
     );
-
-    if (!stepsResponse.ok) {
-      const text = await stepsResponse.text();
-      throw new Error(`Failed to submit simulation steps: ${text}`);
-    }
 
     console.log(
       `Simulation will be available at: https://stxer.xyz/simulations/${this.network}/${simulationId}`,

@@ -12,7 +12,9 @@
   "typings": "dist/index.d.ts",
   "files": [
     "dist",
-    "src"
+    "src",
+    "!src/sample",
+    "!dist/sample"
   ],
   "scripts": {
     "analyze": "size-limit --why",

@@ -138,7 +138,89 @@ The `Reads` step supports multiple read operation types:
 ])
 ```
 
-### 2. Get Chain Tip
+### 2. Programmatic Simulation APIs
+
+For advanced use cases where you need more control than `SimulationBuilder` provides, the SDK exposes low-level programmatic APIs that directly map to the stxer V2 simulation endpoints.
+
+#### Instant Simulation
+
+Simulate a single transaction without creating a session. Useful for apps/wallets to preview transaction results before sending:
+
+```typescript
+import { instantSimulation } from 'stxer';
+
+const result = await instantSimulation({
+  transaction: '0x...', // Hex-encoded transaction
+  reads: [
+    { DataVar: ['SP...contract', 'my-var'] },
+    { StxBalance: 'SP...' }
+  ]
+});
+
+console.log(result.receipt.result); // Transaction result
+console.log(result.reads); // Optional read results
+```
+
+#### Session-Based Simulation
+
+For more complex scenarios with multiple steps:
+
+```typescript
+import {
+  createSimulationSession,
+  submitSimulationSteps,
+  getSimulationResult,
+  simulationBatchReads
+} from 'stxer';
+
+// 1. Create a simulation session
+const sessionId = await createSimulationSession({
+  skip_tracing: false // Set to true for faster simulations
+});
+
+// 2. Submit steps to the session
+const stepResults = await submitSimulationSteps(sessionId, {
+  steps: [
+    { Transaction: '0x...' },
+    { Eval: ['SP...', '', 'SP...contract', '(var-get my-var)'] },
+    { SetContractCode: ['SP...contract', '(define-data-var x uint u0)', 4] },
+    { Reads: [
+      { DataVar: ['SP...contract', 'my-var'] },
+      { StxBalance: 'SP...' }
+    ]},
+    { TenureExtend: [] }
+  ]
+});
+
+console.log(`Executed ${stepResults.steps.length} steps`);
+
+// 3. Get full simulation results
+const result = await getSimulationResult(sessionId);
+console.log(result.metadata);
+console.log(result.steps);
+
+// 4. Batch reads from simulation state
+const reads = await simulationBatchReads(sessionId, {
+  vars: [['SP...contract', 'my-var']],
+  maps: [['SP...contract', 'my-map', '0x...']],
+  stx: ['SP...']
+});
+console.log(reads.vars);
+console.log(reads.stx);
+```
+
+#### API Options
+
+All programmatic APIs accept an optional `stxerApi` parameter to customize the endpoint:
+
+```typescript
+const sessionId = await createSimulationSession(
+  { skip_tracing: true },
+  { stxerApi: 'https://testnet-api.stxer.xyz' }
+);
+```
+
+### 3. Get Chain Tip
 
 Fetch the current chain tip information:
 
@@ -152,7 +234,7 @@ console.log(`Bitcoin height: ${tip.bitcoin_height}`);
 console.log(`Tenure cost: ${tip.tenure_cost}`);
 ```
 
-### 3. Contract AST Operations
+### 4. Contract AST Operations
 
 Fetch or parse contract Abstract Syntax Trees:
 
@@ -175,7 +257,7 @@ const parsed = await parseContract({
 });
 ```
 
-### 4. Batch Operations
+### 5. Batch Operations
 
 The SDK provides two approaches for efficient batch reading from the Stacks blockchain:
 
@@ -257,7 +339,7 @@ The BatchProcessor automatically:
 
 This is particularly useful when you need to make multiple blockchain reads and want to optimize network calls.
 
-### 5. Clarity API Utilities
+### 6. Clarity API Utilities
 
 The SDK provides convenient utilities for reading data from Clarity contracts:
 
@@ -293,13 +375,28 @@ These utilities provide type-safe ways to interact with Clarity contracts, with 
 
 ## Configuration
 
-You can customize the API endpoints:
+### API Endpoint Constants
+
+The SDK exports constants for stxer API endpoints:
 
 ```typescript
+import { STXER_API_MAINNET, STXER_API_TESTNET } from 'stxer';
+
+console.log(STXER_API_MAINNET); // https://api.stxer.xyz
+console.log(STXER_API_TESTNET); // https://testnet-api.stxer.xyz
+```
+
+### Customizing API Endpoints
+
+You can customize the API endpoints for all operations:
+
+```typescript
+import { SimulationBuilder, STXER_API_TESTNET } from 'stxer';
+
 const builder = SimulationBuilder.new({
-  apiEndpoint: 'https://api.stxer.xyz', // Default stxer API endpoint
-  stacksNodeAPI: 'https://api.hiro.so', // Default Stacks API endpoint
-  network: 'mainnet' // or 'testnet'
+  apiEndpoint: STXER_API_TESTNET, // Use testnet
+  stacksNodeAPI: 'https://api.testnet.hiro.so', // Testnet Stacks API
+  network: 'testnet',
   skipTracing: false, // Set to true for faster simulations (no debug UI support)
 });
 ```
@@ -307,21 +404,27 @@ const builder = SimulationBuilder.new({
 For `getTip` and AST operations:
 
 ```typescript
-import { getTip, getContractAST, parseContract } from 'stxer';
+import { getTip, getContractAST, parseContract, STXER_API_MAINNET } from 'stxer';
 
 const tip = await getTip({
-  stxerApi: 'https://api.stxer.xyz' // Optional
+  stxerApi: STXER_API_MAINNET // Optional, defaults to mainnet
 });
 
 const ast = await getContractAST({
   contractId: 'SP...contract',
-  stxerApi: 'https://api.stxer.xyz' // Optional
+  stxerApi: STXER_API_MAINNET // Optional
 });
 ```
 
 ## API Reference
 
-### Simulation
+### Constants
+
+- `STXER_API_MAINNET` - Mainnet API endpoint (https://api.stxer.xyz)
+- `STXER_API_TESTNET` - Testnet API endpoint (https://testnet-api.stxer.xyz)
+- `DEFAULT_STXER_API` - Default API endpoint (same as STXER_API_MAINNET)
+
+### Simulation Builder (High-Level)
 
 - `SimulationBuilder.new(options)` - Create a new simulation builder
 - `builder.useBlockHeight(height)` - Set block height for simulation
@@ -340,6 +443,17 @@ const ast = await getContractAST({
 
 **Execution:**
 - `builder.run()` - Execute the simulation and return simulation ID
+
+### Programmatic Simulation APIs (Low-Level)
+
+**Instant Simulation:**
+- `instantSimulation(request, options?)` - Simulate a single transaction without session
+
+**Session Management:**
+- `createSimulationSession(options?, apiOptions?)` - Create a new simulation session
+- `submitSimulationSteps(sessionId, request, options?)` - Submit steps to a session
+- `getSimulationResult(sessionId, options?)` - Get full simulation results
+- `simulationBatchReads(sessionId, request, options?)` - Batch reads from simulation state
 
 ### Chain Tip
 

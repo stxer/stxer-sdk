@@ -5,9 +5,8 @@
  * so please be careful when adding `import`s to it.
  */
 
+import { DEFAULT_STXER_API } from './constants';
 import type { ClarityEpoch, ContractAST } from './types';
-
-const DEFAULT_STXER_API = 'https://api.stxer.xyz';
 
 export interface AstOptions {
   stxerApi?: string;
