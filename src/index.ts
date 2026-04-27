@@ -1,17 +1,12 @@
+// `dts build` (rollup-plugin-typescript2 + babel) does not enable
+// `@babel/preset-typescript` on the entry, so inline `type` specifiers
+// inside `export {}` and standalone `export type {}` blocks both crash
+// the build (babel falls back to flow grammar). Stick with `export *`.
 export * from './ast';
 export * from './batch-api';
 export * from './clarity-api';
 export * from './constants';
 export * from './simulation';
-// Export simulation-api functions explicitly to avoid type conflicts
-export {
-  type CreateSessionOptions,
-  createSimulationSession,
-  getSimulationResult,
-  instantSimulation,
-  type SimulationApiOptions,
-  simulationBatchReads,
-  submitSimulationSteps,
-} from './simulation-api';
+export * from './simulation-api';
 export * from './tip';
 export * from './types';

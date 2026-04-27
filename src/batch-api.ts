@@ -31,7 +31,8 @@ export interface BatchReads {
 }
 
 export interface BatchReadsResult {
-  tip: string;
+  /** Index block hash the batch ran against. Matches the wire field name. */
+  index_block_hash: string;
   vars: (ClarityValue | Error)[];
   maps: (ClarityValue | Error)[];
   readonly: (ClarityValue | Error)[];
@@ -44,10 +45,10 @@ export interface BatchApiOptions {
 const DEFAULT_STXER_API = 'https://api.stxer.xyz';
 
 function convertResults(
-  rs: ({ Ok: string } | { Err: string })[],
+  rs: ({ Ok: string } | { Err: string })[] | undefined,
 ): (ClarityValue | Error)[] {
   const results: (ClarityValue | Error)[] = [];
-  for (const v of rs) {
+  for (const v of rs ?? []) {
     if ('Ok' in v) {
       results.push(deserializeCV(v.Ok));
     } else {
@@ -123,14 +124,14 @@ export async function batchRead(
   }
 
   const rs = JSON.parse(text) as {
-    tip: string;
-    vars: ({ Ok: string } | { Err: string })[];
-    maps: ({ Ok: string } | { Err: string })[];
-    readonly: ({ Ok: string } | { Err: string })[];
+    index_block_hash: string;
+    vars?: ({ Ok: string } | { Err: string })[];
+    maps?: ({ Ok: string } | { Err: string })[];
+    readonly?: ({ Ok: string } | { Err: string })[];
   };
 
   return {
-    tip: rs.tip,
+    index_block_hash: rs.index_block_hash,
     vars: convertResults(rs.vars),
     maps: convertResults(rs.maps),
     readonly: convertResults(rs.readonly),

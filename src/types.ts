@@ -194,14 +194,62 @@ export interface ExecutionCost {
   runtime: number;
 }
 
+/**
+ * Receipt for a transaction that the engine executed to completion.
+ *
+ * "Successful execution" does NOT imply contract-level success. Four
+ * failure signals to check, in this order:
+ *   1. Outer `Err` on `Result.Transaction` — engine could not run the tx
+ *      at all (deserialization failure etc.); no receipt is produced.
+ *   2. `post_condition_aborted: true` — execution ran, post-condition
+ *      tripped, state was rolled back.
+ *   3. `vm_error: string` (without `post_condition_aborted`) — Clarity
+ *      VM raised a runtime error or static analysis failed.
+ *   4. `(err uX)` inside `result` — contract returned a Clarity error
+ *      response. Application-level; NOT signalled by any field above.
+ *      Decode `result` to detect.
+ *
+ * `post_condition_aborted` and `vm_error` are NOT independent: when a
+ * PC trips the upstream sets `post_condition_aborted: true` AND writes
+ * the PC abort reason into `vm_error` as a side effect. The reverse is
+ * not true — `vm_error` alone (with `post_condition_aborted: false`)
+ * means a VM / analysis failure that is not a PC abort.
+ */
 export interface TransactionReceipt {
+  /**
+   * Clarity return value, SIP-005 hex-serialized. For contract-call txs
+   * this includes the `(ok ...)` / `(err ...)` response wrapper —
+   * Clarity-level `(err uX)` lives here, NOT on `vm_error` or the outer
+   * `Err`.
+   */
   result: string;
   stx_burned: number;
   tx_index: number;
+  /**
+   * Error message from the upstream Clarity VM. `null` when the tx had
+   * no VM-level issue. When `post_condition_aborted` is `true` this
+   * field is also populated with the PC abort reason — check
+   * `post_condition_aborted` first to disambiguate.
+   */
   vm_error: string | null;
+  /**
+   * `true` when one or more post-conditions failed and the tx was
+   * aborted. Implies `vm_error` is also set (to the abort reason); the
+   * reverse does not hold.
+   */
   post_condition_aborted: boolean;
+  /** Wall-clock simulation time in milliseconds. */
   costs: number;
   execution_cost: ExecutionCost;
+  /**
+   * Events emitted during execution (contract logs, STX transfers,
+   * FT/NFT events, etc.). Each entry is a JSON-encoded **string** —
+   * call `JSON.parse(events[i])` to get the event object. Items are
+   * NOT JSON objects in the array.
+   *
+   * For typed access, use {@link parseSimulationEvent} or cast:
+   *   `JSON.parse(events[i]) as SimulationEvent`.
+   */
   events: string[];
 }
 
@@ -213,33 +261,226 @@ export interface TransactionErrResult {
   Err: string;
 }
 
+// =============================================================================
+// Simulation Events
+// =============================================================================
+// Wire format for entries inside `TransactionReceipt.events[]` (each entry
+// there is a JSON-encoded string carrying one of these payloads).
+//
+// Source of truth: `clarity/src/vm/events.rs` in
+// https://github.com/stacks-network/stacks-core —
+// `StacksTransactionEvent::json_serialize`. These types intentionally
+// differ from `@stacks/stacks-blockchain-api-types.TransactionEvent`,
+// which describes Hiro API responses with a different envelope.
+//
+// Numeric fields that the rust source emits via `format!("{}", u128)` /
+// `format!("{}", u64)` are typed as `string`, not `number` — the wire
+// carries them as decimal strings to preserve full precision.
+
+/** Common envelope present on every event variant. */
+interface SimulationEventBase {
+  /** Hex txid with leading `0x`. */
+  txid: string;
+  event_index: number;
+  /**
+   * `true` when the event was emitted from successfully committed code.
+   * `false` when the tx was rolled back (post-condition abort, vm_error).
+   * Tracks rust `tx_receipt.vm_error.is_none() && !post_condition_aborted`.
+   */
+  committed: boolean;
+}
+
+/** Payload for `print` events and other contract-emitted events. */
+export interface SmartContractEventData {
+  /** `<address>.<contract_name>` of the contract that emitted the event. */
+  contract_identifier: string;
+  /** Topic key — `"print"` for `(print …)` calls. */
+  topic: string;
+  /**
+   * Structured Clarity Value JSON (the rust `Value` enum's serde output).
+   * The shape is complex and varies by Clarity type; prefer `raw_value`
+   * for typed decoding.
+   */
+  value: unknown;
+  /**
+   * SIP-005 hex of the value, with leading `0x`. Pass to
+   * `deserializeCV()` from `@stacks/transactions` for typed decoding.
+   */
+  raw_value: string;
+}
+
+export interface StxTransferEventData {
+  sender: string;
+  recipient: string;
+  /** uSTX amount as a decimal string (rust serializes u128 via Display). */
+  amount: string;
+  /** Hex memo, possibly empty. */
+  memo: string;
+}
+
+export interface StxMintEventData {
+  recipient: string;
+  amount: string;
+}
+
+export interface StxBurnEventData {
+  sender: string;
+  amount: string;
+}
+
+export interface StxLockEventData {
+  locked_amount: string;
+  /** Decimal string (rust serializes u64 via Display). */
+  unlock_height: string;
+  locked_address: string;
+  contract_identifier: string;
+}
+
+export interface NftTransferEventData {
+  /** `<contract_id>::<asset_name>`. */
+  asset_identifier: string;
+  sender: string;
+  recipient: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface NftMintEventData {
+  asset_identifier: string;
+  recipient: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface NftBurnEventData {
+  asset_identifier: string;
+  sender: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface FtTransferEventData {
+  asset_identifier: string;
+  sender: string;
+  recipient: string;
+  amount: string;
+}
+
+export interface FtMintEventData {
+  asset_identifier: string;
+  recipient: string;
+  amount: string;
+}
+
+export interface FtBurnEventData {
+  asset_identifier: string;
+  sender: string;
+  amount: string;
+}
+
+/**
+ * Discriminated union of every event variant the simulator emits.
+ * The `type` discriminator names the per-variant payload key — e.g.
+ * `type: 'contract_event'` carries the payload at `event.contract_event`.
+ *
+ * ```ts
+ * const event = parseSimulationEvent(receipt.events[0]);
+ * if (event.type === 'contract_event') {
+ *   // event.contract_event.{contract_identifier, topic, raw_value, value}
+ * }
+ * ```
+ */
+export type SimulationEvent =
+  | (SimulationEventBase & {
+      type: 'contract_event';
+      contract_event: SmartContractEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_transfer_event';
+      stx_transfer_event: StxTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_mint_event';
+      stx_mint_event: StxMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_burn_event';
+      stx_burn_event: StxBurnEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_lock_event';
+      stx_lock_event: StxLockEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_transfer_event';
+      nft_transfer_event: NftTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_mint_event';
+      nft_mint_event: NftMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_burn_event';
+      nft_burn_event: NftBurnEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_transfer_event';
+      ft_transfer_event: FtTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_mint_event';
+      ft_mint_event: FtMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_burn_event';
+      ft_burn_event: FtBurnEventData;
+    });
+
+/** Convenience parser for `TransactionReceipt.events[i]`. */
+export function parseSimulationEvent(raw: string): SimulationEvent {
+  return JSON.parse(raw) as SimulationEvent;
+}
+
 // Read step types
 export interface MapEntryStep {
-  MapEntry: [string, string, string]; // [contract_id, map_name, key_hex]
+  MapEntry: [contract_id: string, map_name: string, key_hex: string];
 }
 
 export interface DataVarStep {
-  DataVar: [string, string]; // [contract_id, variable_name]
+  DataVar: [contract_id: string, variable_name: string];
 }
 
 export interface EvalReadonlyStep {
-  EvalReadonly: [string, string, string, string]; // [sender, sponsor, contract_id, code]
+  /** `sponsor` is `""` (empty string) when there is no sponsor. */
+  EvalReadonly: [
+    sender: string,
+    sponsor: string,
+    contract_id: string,
+    code: string,
+  ];
 }
 
 export interface StxBalanceStep {
-  StxBalance: string; // principal
+  /** Principal whose STX balance to read. */
+  StxBalance: string;
 }
 
 export interface FtBalanceStep {
-  FtBalance: [string, string, string]; // [contract_id, token_name, principal]
+  /**
+   * Reads the FT balance via three separate parameters. Note: the batch
+   * `ft_balance` field on `SimulationBatchReadsRequest` uses a different
+   * `<contract_id>::<token_name>` combined identifier shape.
+   */
+  FtBalance: [contract_id: string, token_name: string, principal: string];
 }
 
 export interface FtSupplyStep {
-  FtSupply: [string, string]; // [contract_id, token_name]
+  FtSupply: [contract_id: string, token_name: string];
 }
 
 export interface NonceStep {
-  Nonce: string; // principal
+  /** Principal whose nonce to read. */
+  Nonce: string;
 }
 
 export type ReadStep =
@@ -261,9 +502,27 @@ export interface ReadErrResult {
 
 export type ReadResult = ReadOkResult | ReadErrResult;
 
+/**
+ * Per-step result returned by `POST /devtools/v2/simulations/{id}` (the
+ * "submit steps" endpoint). Mirrors the rust `RunSimulationStepResult`
+ * enum — externally tagged, exactly one variant key present.
+ *
+ * Distinct from `SimulationStepSummary`, which is what
+ * `GET /devtools/v2/simulations/{id}` returns and includes the original
+ * step input alongside the result.
+ */
+export type SimulationStepResult =
+  | { Transaction: TransactionOkResult | TransactionErrResult }
+  | { Eval: { Ok: string } | { Err: string } }
+  | { SetContractCode: { Ok: null } | { Err: string } }
+  | { Reads: ReadResult[] }
+  | { TenureExtend: ExecutionCost };
+
 // Simulation step types (summary format from GET /devtools/v2/simulations/{id})
 export interface TransactionStepSummary {
-  Transaction: string; // tx hex
+  /** Transaction serialized to hex. */
+  Transaction: string;
+  /** Hex-encoded txid. Empty string `""` when the tx failed engine-level. */
   TxId: string;
   Result: {
     Transaction: TransactionOkResult | TransactionErrResult;
@@ -279,14 +538,15 @@ export interface ReadsStepSummary {
 }
 
 export interface SetContractCodeStepSummary {
-  SetContractCode: [string, string, number]; // [contract_id, code, clarity_version]
+  SetContractCode: [contract_id: string, code: string, clarity_version: number];
   Result: {
     SetContractCode: { Ok: null } | { Err: string };
   };
 }
 
 export interface EvalStepSummary {
-  Eval: [string, string, string, string]; // [sender, sponsor, contract_id, code]
+  /** `sponsor` is `""` (empty string) when there is no sponsor. */
+  Eval: [sender: string, sponsor: string, contract_id: string, code: string];
   Result: {
     Eval: { Ok: string } | { Err: string };
   };
@@ -307,7 +567,6 @@ export type SimulationStepSummary =
 
 // Simulation metadata
 export interface SimulationMetadata {
-  ast_rules: 0 | 1;
   block_height: number;
   block_hash: string;
   burn_block_height: number;
@@ -338,9 +597,23 @@ export interface CreateSimulationResponse {
 
 // Submit steps request
 export type SimulationStepInput =
-  | { Transaction: string } // tx hex
-  | { Eval: [string, string, string, string] } // [sender, sponsor, contract_id, code]
-  | { SetContractCode: [string, string, number] } // [contract_id, code, clarity_version]
+  | { Transaction: string }
+  | {
+      /** `sponsor` is `""` when there is no sponsor. */
+      Eval: [
+        sender: string,
+        sponsor: string,
+        contract_id: string,
+        code: string,
+      ];
+    }
+  | {
+      SetContractCode: [
+        contract_id: string,
+        code: string,
+        clarity_version: number,
+      ];
+    }
   | { Reads: ReadStep[] }
   | { TenureExtend: [] };
 
@@ -349,44 +622,79 @@ export interface SubmitSimulationStepsRequest {
 }
 
 export interface SubmitSimulationStepsResponse {
-  steps: SimulationStepSummary[];
+  steps: SimulationStepResult[];
 }
 
 // Batch reads from simulation
 export interface SimulationBatchReadsRequest {
-  vars?: [string, string][]; // [contract_id, variable_name]
-  maps?: [string, string, string][]; // [contract_id, map_name, key_hex]
-  readonly?: Array<string | [string, string, string, string]>; // [contract_id, function_name, ...args]
-  readonly_with_sender?: Array<
-    // [sender, sponsor, contract_id, function_name, ...args]
-    [string, string, string, string, ...string[]]
-  >;
-  stx?: string[]; // principals
-  nonces?: string[]; // principals
-  ft_balance?: [string, string][]; // [token_identifier, principal]
-  ft_supply?: [string, string][]; // [contract_id, ft_token_name]
+  /** `[contract_id, variable_name]` per entry. */
+  vars?: [contract_id: string, variable_name: string][];
+  /** `[contract_id, map_name, key_hex]` per entry. */
+  maps?: [contract_id: string, map_name: string, key_hex: string][];
+  /**
+   * `[contract_id, function_name, ...arg_hex]` per entry. The first two
+   * positions are fixed; remaining elements are hex-encoded Clarity
+   * values, one per function argument (so the length matches the
+   * function's arity, not arbitrary).
+   */
+  readonly?: [
+    contract_id: string,
+    function_name: string,
+    ...args_hex: string[],
+  ][];
+  /**
+   * `[sender, sponsor, contract_id, function_name, ...arg_hex]` per
+   * entry. The first four positions are fixed (`sponsor` is `""` when
+   * there is no sponsor); remaining elements are hex-encoded Clarity
+   * values, one per function argument.
+   */
+  readonly_with_sender?: [
+    sender: string,
+    sponsor: string,
+    contract_id: string,
+    function_name: string,
+    ...args_hex: string[],
+  ][];
+  /** Principals to read STX balances for. */
+  stx?: string[];
+  /** Principals to read nonces for. */
+  nonces?: string[];
+  /** `[<contract_id>::<token_name>, principal]` per entry. */
+  ft_balance?: [token_identifier: string, principal: string][];
+  /**
+   * Flat array of FT identifiers in `<contract_id>::<token_name>` form,
+   * one entry per token to look up. Any length.
+   */
+  ft_supply?: string[];
 }
 
+/**
+ * Each category is omitted from the JSON response when the corresponding
+ * request field was empty/absent (rust uses
+ * `serde(skip_serializing_if = "Vec::is_empty")` per field).
+ */
 export interface SimulationBatchReadsResponse {
-  vars: ReadResult[];
-  maps: ReadResult[];
-  readonly: ReadResult[];
-  readonly_with_sender: ReadResult[];
-  stx: ReadResult[];
-  nonces: ReadResult[];
-  ft_balance: ReadResult[];
-  ft_supply: ReadResult[];
+  vars?: ReadResult[];
+  maps?: ReadResult[];
+  readonly?: ReadResult[];
+  readonly_with_sender?: ReadResult[];
+  stx?: ReadResult[];
+  nonces?: ReadResult[];
+  ft_balance?: ReadResult[];
+  ft_supply?: ReadResult[];
 }
 
 // Instant simulation
 export interface InstantSimulationRequest {
-  transaction: string; // tx hex
+  /** Transaction serialized to hex. */
+  transaction: string;
   block_height?: number;
   block_hash?: string;
   reads?: ReadStep[];
 }
 
 export interface InstantSimulationResponse {
-  reads?: ReadResult[];
+  /** Always present (may be `[]`). Aligned positionally with the request `reads`. */
+  reads: ReadResult[];
   receipt: TransactionReceipt;
 }
