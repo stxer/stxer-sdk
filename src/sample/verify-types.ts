@@ -158,22 +158,57 @@ function checkSimulationEventShape(label: string, parsed: unknown) {
       `${label}.${parsed.type}: payload key matches discriminator`,
       isObject(parsed[parsed.type]),
     );
+    observedEventTypes.add(parsed.type);
   }
 }
 
 const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 const CONTRACT_NAME = 'verify-types-counter';
 const CONTRACT_ID = `${SENDER}.${CONTRACT_NAME}`;
+const RECIPIENT = 'SP000000000000000000002Q6VF78';
 const SOURCE = `
 (define-data-var counter uint u0)
+(define-fungible-token sample-ft)
+(define-non-fungible-token sample-nft uint)
+
 (define-public (bump)
   (begin
     (print { event: "bump" })
     (var-set counter (+ (var-get counter) u1))
     (ok (var-get counter))))
+
 (define-read-only (get-counter)
   (ok (var-get counter)))
+
+;; Emits 8 of the 11 SimulationEvent variants in one transaction.
+;; Skipped: stx_mint_event, stx_burn_event, stx_lock_event -- Clarity
+;; contracts cannot trigger those (they come from coinbase / PoX).
+(define-public (emit-all)
+  (begin
+    (print { kind: "verify-types" })           ;; contract_event
+    (try! (stx-transfer? u1 tx-sender '${RECIPIENT}))  ;; stx_transfer_event
+    (try! (ft-mint? sample-ft u100 tx-sender)) ;; ft_mint_event
+    (try! (ft-transfer? sample-ft u10 tx-sender '${RECIPIENT})) ;; ft_transfer_event
+    (try! (ft-burn? sample-ft u5 tx-sender))   ;; ft_burn_event
+    (try! (nft-mint? sample-nft u1 tx-sender)) ;; nft_mint_event
+    (try! (nft-transfer? sample-nft u1 tx-sender '${RECIPIENT})) ;; nft_transfer_event
+    (try! (nft-mint? sample-nft u2 tx-sender)) ;; (need a fresh one to burn)
+    (try! (nft-burn? sample-nft u2 tx-sender)) ;; nft_burn_event
+    (ok true)))
 `;
+
+const TRIGGERABLE_EVENT_TYPES: ReadonlySet<SimulationEvent['type']> = new Set([
+  'contract_event',
+  'stx_transfer_event',
+  'ft_mint_event',
+  'ft_transfer_event',
+  'ft_burn_event',
+  'nft_mint_event',
+  'nft_transfer_event',
+  'nft_burn_event',
+]);
+
+const observedEventTypes = new Set<string>();
 
 const ALEX_TOKEN = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex';
 const ALEX_VAULT = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.amm-vault-v2-01';
@@ -252,10 +287,14 @@ async function checkSession(tip: SidecarTip) {
   };
 
   // Cover every SimulationStepInput variant so every SimulationStepResult
-  // variant lands in the response.
+  // variant lands in the response. The `emit-all` call exercises 8 of
+  // the 11 SimulationEvent shapes — the remaining 3 (stx_mint /
+  // stx_burn / stx_lock) come from coinbase / PoX and can't be
+  // triggered from a Clarity contract.
   const steps: SimulationStepInput[] = [
     { Transaction: await buildTx() },
     { Transaction: await buildTx('bump') },
+    { Transaction: await buildTx('emit-all') },
     { Eval: [SENDER, '', CONTRACT_ID, '(get-counter)'] },
     {
       Reads: [
@@ -547,6 +586,18 @@ async function main() {
   await checkInstant(tip);
   await checkSession(tip);
   await checkSidecarBatch();
+
+  // Coverage check: every contract-triggerable SimulationEvent variant
+  // must have fired at least once across the run. The other three
+  // (stx_mint / stx_burn / stx_lock) come from coinbase / PoX and are
+  // not reachable from Clarity contracts — out of scope for runtime
+  // verification, covered by the compile-time satisfies check above.
+  for (const t of TRIGGERABLE_EVENT_TYPES) {
+    check(
+      `coverage: SimulationEvent variant '${t}' observed at runtime`,
+      observedEventTypes.has(t),
+    );
+  }
 
   console.log(
     `\n${failures.length === 0 ? 'OK' : 'FAIL'}: ${passes} pass, ${failures.length} fail`,
