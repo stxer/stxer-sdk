@@ -48,9 +48,6 @@ importers:
       size-limit:
         specifier: 12.1.0
         version: 12.1.0(jiti@2.6.1)
-      tslib:
-        specifier: 2.8.1
-        version: 2.8.1
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
