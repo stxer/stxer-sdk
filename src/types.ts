@@ -197,18 +197,23 @@ export interface ExecutionCost {
 /**
  * Receipt for a transaction that the engine executed to completion.
  *
- * "Successful execution" does NOT imply contract-level success. There are
- * four distinct failure signals, in increasing depth:
+ * "Successful execution" does NOT imply contract-level success. Four
+ * failure signals to check, in this order:
  *   1. Outer `Err` on `Result.Transaction` — engine could not run the tx
  *      at all (deserialization failure etc.); no receipt is produced.
  *   2. `post_condition_aborted: true` — execution ran, post-condition
  *      tripped, state was rolled back.
- *   3. `vm_error: string` — Clarity VM raised a runtime error.
+ *   3. `vm_error: string` (without `post_condition_aborted`) — Clarity
+ *      VM raised a runtime error or static analysis failed.
  *   4. `(err uX)` inside `result` — contract returned a Clarity error
  *      response. Application-level; NOT signalled by any field above.
  *      Decode `result` to detect.
  *
- * (2) and (3) are independent — both may be set on the same receipt.
+ * `post_condition_aborted` and `vm_error` are NOT independent: when a
+ * PC trips the upstream sets `post_condition_aborted: true` AND writes
+ * the PC abort reason into `vm_error` as a side effect. The reverse is
+ * not true — `vm_error` alone (with `post_condition_aborted: false`)
+ * means a VM / analysis failure that is not a PC abort.
  */
 export interface TransactionReceipt {
   /**
@@ -221,14 +226,16 @@ export interface TransactionReceipt {
   stx_burned: number;
   tx_index: number;
   /**
-   * VM-level runtime error message (e.g. `Runtime(...)` from the Clarity
-   * interpreter). `null` when the tx did not raise a runtime error.
-   * Independent of `post_condition_aborted` — both may be set.
+   * Error message from the upstream Clarity VM. `null` when the tx had
+   * no VM-level issue. When `post_condition_aborted` is `true` this
+   * field is also populated with the PC abort reason — check
+   * `post_condition_aborted` first to disambiguate.
    */
   vm_error: string | null;
   /**
    * `true` when one or more post-conditions failed and the tx was
-   * aborted. Independent of `vm_error` — both may be set.
+   * aborted. Implies `vm_error` is also set (to the abort reason); the
+   * reverse does not hold.
    */
   post_condition_aborted: boolean;
   /** Wall-clock simulation time in milliseconds. */

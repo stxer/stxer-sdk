@@ -1,13 +1,16 @@
 /**
- * Demonstrates the four distinct failure signals on a simulation receipt.
+ * Demonstrates the four failure signals on a simulation receipt.
  * Deploys a bug-zoo contract, calls one trigger function per failure
  * mode in a single session, and prints which signals fired for each.
  *
  *   1. Outer `Err` on `Result.Transaction`        — engine refused the tx
  *                                                    (no receipt produced)
  *   2. `post_condition_aborted: true`             — post-condition tripped,
- *                                                    state rolled back
- *   3. `vm_error: string`                          — Clarity VM raised a
+ *                                                    state rolled back. Note:
+ *                                                    `vm_error` is also set
+ *                                                    in this case (to the
+ *                                                    abort reason).
+ *   3. `vm_error: string` w/o PC abort             — Clarity VM raised a
  *                                                    runtime error
  *   4. `(err uX)` inside `result`                  — contract returned a
  *                                                    Clarity error response.
@@ -15,7 +18,9 @@
  *                                                    field above; decode
  *                                                    `result` to detect.
  *
- * (2) and (3) are independent — both can be set on the same receipt.
+ * `post_condition_aborted` IMPLIES `vm_error` is set; the reverse is
+ * not true. Always check `post_condition_aborted` first to disambiguate
+ * between a PC abort and a plain VM/analysis failure.
  *
  * Also shows that each `events[i]` is a JSON-encoded *string* — the
  * caller must `JSON.parse` it to get the event object.

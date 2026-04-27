@@ -222,16 +222,28 @@ const sessionId = await createSimulationSession(
 
 #### TransactionReceipt: failure signals & events
 
-When a step lands as `{ Transaction: { Ok: receipt } }`, the engine ran the transaction to completion — but that does **not** mean the contract logic succeeded. There are four distinct failure signals on or around a receipt; they are independent and must each be checked:
+When a step lands as `{ Transaction: { Ok: receipt } }`, the engine ran the transaction to completion — but that does **not** mean the contract logic succeeded. There are four failure signals on or around a receipt; check them in this order:
 
 | Signal | Where | Meaning |
 |---|---|---|
 | Outer `Err` | `Result.Transaction = { Err: string }` | Engine refused the tx (deserialization, etc.). No receipt is produced. |
 | `post_condition_aborted: true` | on the receipt | Execution ran, a post-condition tripped, state was rolled back. |
-| `vm_error: string` | on the receipt | Clarity VM raised a runtime error (overflow, unwrap on `none`, etc.). |
+| `vm_error: string` (without PC abort) | on the receipt | Clarity VM raised a runtime error (overflow, unwrap on `none`, etc.) or static analysis failed. |
 | `(err uX)` inside `result` | on the receipt | Contract returned a Clarity error response. Not signalled by any flag — decode `result` to detect (response::err prefix is `08`). |
 
-`post_condition_aborted` and `vm_error` are independent and may both be set on the same receipt.
+**`post_condition_aborted` and `vm_error` are not independent.** When a post-condition trips, the upstream sets `post_condition_aborted: true` *and* writes the PC abort reason into `vm_error` as a side effect — so `vm_error` is also non-null in that case. The reverse is not true: `vm_error` alone (with `post_condition_aborted: false`) means a VM/runtime/analysis failure that is *not* a PC abort. A clean way to narrow:
+
+```typescript
+if (receipt.post_condition_aborted) {
+  // PC abort. receipt.vm_error holds the abort reason.
+} else if (receipt.vm_error != null) {
+  // Runtime / analysis failure (not a PC abort).
+} else if (receipt.result.startsWith('08')) {
+  // Contract returned (err uX). Decode receipt.result for the value.
+} else {
+  // Clean success.
+}
+```
 
 **Events are JSON-encoded strings, not objects.** `receipt.events` is `string[]`; each entry is a JSON-encoded event payload. Call `JSON.parse(receipt.events[i])` to inspect — iterating without parsing yields opaque strings.
 
