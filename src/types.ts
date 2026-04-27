@@ -194,14 +194,52 @@ export interface ExecutionCost {
   runtime: number;
 }
 
+/**
+ * Receipt for a transaction that the engine executed to completion.
+ *
+ * "Successful execution" does NOT imply contract-level success. There are
+ * four distinct failure signals, in increasing depth:
+ *   1. Outer `Err` on `Result.Transaction` — engine could not run the tx
+ *      at all (deserialization failure etc.); no receipt is produced.
+ *   2. `post_condition_aborted: true` — execution ran, post-condition
+ *      tripped, state was rolled back.
+ *   3. `vm_error: string` — Clarity VM raised a runtime error.
+ *   4. `(err uX)` inside `result` — contract returned a Clarity error
+ *      response. Application-level; NOT signalled by any field above.
+ *      Decode `result` to detect.
+ *
+ * (2) and (3) are independent — both may be set on the same receipt.
+ */
 export interface TransactionReceipt {
+  /**
+   * Clarity return value, SIP-005 hex-serialized. For contract-call txs
+   * this includes the `(ok ...)` / `(err ...)` response wrapper —
+   * Clarity-level `(err uX)` lives here, NOT on `vm_error` or the outer
+   * `Err`.
+   */
   result: string;
   stx_burned: number;
   tx_index: number;
+  /**
+   * VM-level runtime error message (e.g. `Runtime(...)` from the Clarity
+   * interpreter). `null` when the tx did not raise a runtime error.
+   * Independent of `post_condition_aborted` — both may be set.
+   */
   vm_error: string | null;
+  /**
+   * `true` when one or more post-conditions failed and the tx was
+   * aborted. Independent of `vm_error` — both may be set.
+   */
   post_condition_aborted: boolean;
+  /** Wall-clock simulation time in milliseconds. */
   costs: number;
   execution_cost: ExecutionCost;
+  /**
+   * Events emitted during execution (contract logs, STX transfers,
+   * FT/NFT events, etc.). Each entry is a JSON-encoded **string** —
+   * call `JSON.parse(events[i])` to get the event object. Items are
+   * NOT JSON objects in the array.
+   */
   events: string[];
 }
 
@@ -215,31 +253,44 @@ export interface TransactionErrResult {
 
 // Read step types
 export interface MapEntryStep {
-  MapEntry: [string, string, string]; // [contract_id, map_name, key_hex]
+  MapEntry: [contract_id: string, map_name: string, key_hex: string];
 }
 
 export interface DataVarStep {
-  DataVar: [string, string]; // [contract_id, variable_name]
+  DataVar: [contract_id: string, variable_name: string];
 }
 
 export interface EvalReadonlyStep {
-  EvalReadonly: [string, string, string, string]; // [sender, sponsor, contract_id, code]
+  /** `sponsor` is `""` (empty string) when there is no sponsor. */
+  EvalReadonly: [
+    sender: string,
+    sponsor: string,
+    contract_id: string,
+    code: string,
+  ];
 }
 
 export interface StxBalanceStep {
-  StxBalance: string; // principal
+  /** Principal whose STX balance to read. */
+  StxBalance: string;
 }
 
 export interface FtBalanceStep {
-  FtBalance: [string, string, string]; // [contract_id, token_name, principal]
+  /**
+   * Reads the FT balance via three separate parameters. Note: the batch
+   * `ft_balance` field on `SimulationBatchReadsRequest` uses a different
+   * `<contract_id>::<token_name>` combined identifier shape.
+   */
+  FtBalance: [contract_id: string, token_name: string, principal: string];
 }
 
 export interface FtSupplyStep {
-  FtSupply: [string, string]; // [contract_id, token_name]
+  FtSupply: [contract_id: string, token_name: string];
 }
 
 export interface NonceStep {
-  Nonce: string; // principal
+  /** Principal whose nonce to read. */
+  Nonce: string;
 }
 
 export type ReadStep =
@@ -261,9 +312,27 @@ export interface ReadErrResult {
 
 export type ReadResult = ReadOkResult | ReadErrResult;
 
+/**
+ * Per-step result returned by `POST /devtools/v2/simulations/{id}` (the
+ * "submit steps" endpoint). Mirrors the rust `RunSimulationStepResult`
+ * enum — externally tagged, exactly one variant key present.
+ *
+ * Distinct from `SimulationStepSummary`, which is what
+ * `GET /devtools/v2/simulations/{id}` returns and includes the original
+ * step input alongside the result.
+ */
+export type SimulationStepResult =
+  | { Transaction: TransactionOkResult | TransactionErrResult }
+  | { Eval: { Ok: string } | { Err: string } }
+  | { SetContractCode: { Ok: null } | { Err: string } }
+  | { Reads: ReadResult[] }
+  | { TenureExtend: ExecutionCost };
+
 // Simulation step types (summary format from GET /devtools/v2/simulations/{id})
 export interface TransactionStepSummary {
-  Transaction: string; // tx hex
+  /** Transaction serialized to hex. */
+  Transaction: string;
+  /** Hex-encoded txid. Empty string `""` when the tx failed engine-level. */
   TxId: string;
   Result: {
     Transaction: TransactionOkResult | TransactionErrResult;
@@ -279,14 +348,15 @@ export interface ReadsStepSummary {
 }
 
 export interface SetContractCodeStepSummary {
-  SetContractCode: [string, string, number]; // [contract_id, code, clarity_version]
+  SetContractCode: [contract_id: string, code: string, clarity_version: number];
   Result: {
     SetContractCode: { Ok: null } | { Err: string };
   };
 }
 
 export interface EvalStepSummary {
-  Eval: [string, string, string, string]; // [sender, sponsor, contract_id, code]
+  /** `sponsor` is `""` (empty string) when there is no sponsor. */
+  Eval: [sender: string, sponsor: string, contract_id: string, code: string];
   Result: {
     Eval: { Ok: string } | { Err: string };
   };
@@ -338,9 +408,23 @@ export interface CreateSimulationResponse {
 
 // Submit steps request
 export type SimulationStepInput =
-  | { Transaction: string } // tx hex
-  | { Eval: [string, string, string, string] } // [sender, sponsor, contract_id, code]
-  | { SetContractCode: [string, string, number] } // [contract_id, code, clarity_version]
+  | { Transaction: string }
+  | {
+      /** `sponsor` is `""` when there is no sponsor. */
+      Eval: [
+        sender: string,
+        sponsor: string,
+        contract_id: string,
+        code: string,
+      ];
+    }
+  | {
+      SetContractCode: [
+        contract_id: string,
+        code: string,
+        clarity_version: number,
+      ];
+    }
   | { Reads: ReadStep[] }
   | { TenureExtend: [] };
 
@@ -349,44 +433,67 @@ export interface SubmitSimulationStepsRequest {
 }
 
 export interface SubmitSimulationStepsResponse {
-  steps: SimulationStepSummary[];
+  steps: SimulationStepResult[];
 }
 
 // Batch reads from simulation
 export interface SimulationBatchReadsRequest {
-  vars?: [string, string][]; // [contract_id, variable_name]
-  maps?: [string, string, string][]; // [contract_id, map_name, key_hex]
-  readonly?: Array<string | [string, string, string, string]>; // [contract_id, function_name, ...args]
-  readonly_with_sender?: Array<
-    // [sender, sponsor, contract_id, function_name, ...args]
-    [string, string, string, string, ...string[]]
-  >;
-  stx?: string[]; // principals
-  nonces?: string[]; // principals
-  ft_balance?: [string, string][]; // [token_identifier, principal]
-  ft_supply?: [string, string][]; // [contract_id, ft_token_name]
+  /** `[contract_id, variable_name]` per entry. */
+  vars?: [string, string][];
+  /** `[contract_id, map_name, key_hex]` per entry. */
+  maps?: [string, string, string][];
+  /**
+   * `[contract_id, function_name, ...arg_hex]` per entry. Each subarray
+   * must have at least 2 elements; remaining elements are hex-encoded
+   * Clarity values for the function args.
+   */
+  readonly?: string[][];
+  /**
+   * `[sender, sponsor, contract_id, function_name, ...arg_hex]` per
+   * entry. Each subarray must have at least 4 elements; `sponsor` is
+   * `""` when there is no sponsor.
+   */
+  readonly_with_sender?: string[][];
+  /** Principals to read STX balances for. */
+  stx?: string[];
+  /** Principals to read nonces for. */
+  nonces?: string[];
+  /** `[<contract_id>::<token_name>, principal]` per entry. */
+  ft_balance?: [string, string][];
+  /**
+   * Flat array of FT identifiers in `<contract_id>::<token_name>` form,
+   * one entry per token to look up. Any length.
+   */
+  ft_supply?: string[];
 }
 
+/**
+ * Each category is omitted from the JSON response when the corresponding
+ * request field was empty/absent (rust uses
+ * `serde(skip_serializing_if = "Vec::is_empty")` per field).
+ */
 export interface SimulationBatchReadsResponse {
-  vars: ReadResult[];
-  maps: ReadResult[];
-  readonly: ReadResult[];
-  readonly_with_sender: ReadResult[];
-  stx: ReadResult[];
-  nonces: ReadResult[];
-  ft_balance: ReadResult[];
-  ft_supply: ReadResult[];
+  vars?: ReadResult[];
+  maps?: ReadResult[];
+  readonly?: ReadResult[];
+  readonly_with_sender?: ReadResult[];
+  stx?: ReadResult[];
+  nonces?: ReadResult[];
+  ft_balance?: ReadResult[];
+  ft_supply?: ReadResult[];
 }
 
 // Instant simulation
 export interface InstantSimulationRequest {
-  transaction: string; // tx hex
+  /** Transaction serialized to hex. */
+  transaction: string;
   block_height?: number;
   block_hash?: string;
   reads?: ReadStep[];
 }
 
 export interface InstantSimulationResponse {
-  reads?: ReadResult[];
+  /** Always present (may be `[]`). Aligned positionally with the request `reads`. */
+  reads: ReadResult[];
   receipt: TransactionReceipt;
 }
