@@ -6,7 +6,7 @@
  * tests share state — the counter scenarios accumulate within a
  * scenario, but scenarios are isolated from one another.
  *
- *   pnpm sample:test
+ *   pnpm sample:vitest
  *
  * Tests hit https://api.stxer.xyz; they need network and spend a few
  * seconds per session. Set STXER_SKIP_NETWORK_TESTS=1 to skip in

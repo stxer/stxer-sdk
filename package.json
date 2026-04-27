@@ -30,7 +30,7 @@
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts",
     "sample:verify-types": "tsx src/sample/verify-types.ts",
-    "sample:test": "vitest run src/sample/contract.test.ts"
+    "sample:vitest": "vitest run src/sample/contract-vitest.test.ts"
   },
   "husky": {
     "hooks": {
