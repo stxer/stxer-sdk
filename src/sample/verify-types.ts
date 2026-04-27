@@ -27,6 +27,7 @@ import {
   type ReadResult,
   type ReadStep,
   type SidecarTip,
+  type SimulationEvent,
   type SimulationStepInput,
   simulationBatchReads,
   submitSimulationSteps,
@@ -112,9 +113,51 @@ function checkReceipt(label: string, r: unknown) {
         parsed = undefined;
       }
       check(`${label}.events[${i}]: JSON-encoded object`, isObject(parsed));
+      checkSimulationEventShape(`${label}.events[${i}]`, parsed);
     });
   } else {
     check(`${label}.events: array`, false);
+  }
+}
+
+const KNOWN_EVENT_TYPES = [
+  'contract_event',
+  'stx_transfer_event',
+  'stx_mint_event',
+  'stx_burn_event',
+  'stx_lock_event',
+  'nft_transfer_event',
+  'nft_mint_event',
+  'nft_burn_event',
+  'ft_transfer_event',
+  'ft_mint_event',
+  'ft_burn_event',
+] as const;
+// Compile-time guarantee that the runtime list covers every variant of
+// SimulationEvent. If a new variant is added, this `satisfies` line
+// fails to compile until KNOWN_EVENT_TYPES is updated.
+const _eventTypeCoverage: SimulationEvent['type'][] = [
+  ...KNOWN_EVENT_TYPES,
+] satisfies SimulationEvent['type'][];
+
+function checkSimulationEventShape(label: string, parsed: unknown) {
+  if (!isObject(parsed)) return;
+  // Common envelope.
+  check(`${label}.txid: string`, isString(parsed.txid));
+  check(`${label}.event_index: number`, isNumber(parsed.event_index));
+  check(`${label}.committed: boolean`, isBoolean(parsed.committed));
+  // Discriminator + matching payload key.
+  check(
+    `${label}.type: known SimulationEvent variant`,
+    isString(parsed.type) &&
+      (KNOWN_EVENT_TYPES as readonly string[]).includes(parsed.type),
+    `actual: ${JSON.stringify(parsed.type)}`,
+  );
+  if (typeof parsed.type === 'string') {
+    check(
+      `${label}.${parsed.type}: payload key matches discriminator`,
+      isObject(parsed[parsed.type]),
+    );
   }
 }
 

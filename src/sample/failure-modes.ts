@@ -35,6 +35,7 @@ import {
 import {
   createSimulationSession,
   getTip,
+  parseSimulationEvent,
   type SimulationStepInput,
   submitSimulationSteps,
   type TransactionReceipt,
@@ -140,10 +141,16 @@ async function main() {
     const r = tx.Ok;
     console.log(`[${label}] receipt — ${describe(r)}`);
     for (const ev of r.events) {
-      // events[i] is a JSON-encoded string. JSON.parse it to get the
-      // event object (contract_event / stx_transfer_event / ...).
-      const parsed = JSON.parse(ev);
-      console.log('  event:', parsed);
+      // Typed parse — `event` is narrowed by `event.type`.
+      const event = parseSimulationEvent(ev);
+      if (event.type === 'contract_event') {
+        const { contract_identifier, topic, raw_value } = event.contract_event;
+        console.log(
+          `  ${event.type}: ${contract_identifier} topic=${topic} raw_value=${raw_value}`,
+        );
+      } else {
+        console.log(`  ${event.type}:`, event);
+      }
     }
   }
 

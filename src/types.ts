@@ -246,6 +246,9 @@ export interface TransactionReceipt {
    * FT/NFT events, etc.). Each entry is a JSON-encoded **string** —
    * call `JSON.parse(events[i])` to get the event object. Items are
    * NOT JSON objects in the array.
+   *
+   * For typed access, use {@link parseSimulationEvent} or cast:
+   *   `JSON.parse(events[i]) as SimulationEvent`.
    */
   events: string[];
 }
@@ -256,6 +259,186 @@ export interface TransactionOkResult {
 
 export interface TransactionErrResult {
   Err: string;
+}
+
+// =============================================================================
+// Simulation Events
+// =============================================================================
+// Wire format for entries inside `TransactionReceipt.events[]` (each entry
+// there is a JSON-encoded string carrying one of these payloads).
+//
+// Source of truth: `clarity/src/vm/events.rs` in
+// https://github.com/stacks-network/stacks-core —
+// `StacksTransactionEvent::json_serialize`. These types intentionally
+// differ from `@stacks/stacks-blockchain-api-types.TransactionEvent`,
+// which describes Hiro API responses with a different envelope.
+//
+// Numeric fields that the rust source emits via `format!("{}", u128)` /
+// `format!("{}", u64)` are typed as `string`, not `number` — the wire
+// carries them as decimal strings to preserve full precision.
+
+/** Common envelope present on every event variant. */
+interface SimulationEventBase {
+  /** Hex txid with leading `0x`. */
+  txid: string;
+  event_index: number;
+  /**
+   * `true` when the event was emitted from successfully committed code.
+   * `false` when the tx was rolled back (post-condition abort, vm_error).
+   * Tracks rust `tx_receipt.vm_error.is_none() && !post_condition_aborted`.
+   */
+  committed: boolean;
+}
+
+/** Payload for `print` events and other contract-emitted events. */
+export interface SmartContractEventData {
+  /** `<address>.<contract_name>` of the contract that emitted the event. */
+  contract_identifier: string;
+  /** Topic key — `"print"` for `(print …)` calls. */
+  topic: string;
+  /**
+   * Structured Clarity Value JSON (the rust `Value` enum's serde output).
+   * The shape is complex and varies by Clarity type; prefer `raw_value`
+   * for typed decoding.
+   */
+  value: unknown;
+  /**
+   * SIP-005 hex of the value, with leading `0x`. Pass to
+   * `deserializeCV()` from `@stacks/transactions` for typed decoding.
+   */
+  raw_value: string;
+}
+
+export interface StxTransferEventData {
+  sender: string;
+  recipient: string;
+  /** uSTX amount as a decimal string (rust serializes u128 via Display). */
+  amount: string;
+  /** Hex memo, possibly empty. */
+  memo: string;
+}
+
+export interface StxMintEventData {
+  recipient: string;
+  amount: string;
+}
+
+export interface StxBurnEventData {
+  sender: string;
+  amount: string;
+}
+
+export interface StxLockEventData {
+  locked_amount: string;
+  /** Decimal string (rust serializes u64 via Display). */
+  unlock_height: string;
+  locked_address: string;
+  contract_identifier: string;
+}
+
+export interface NftTransferEventData {
+  /** `<contract_id>::<asset_name>`. */
+  asset_identifier: string;
+  sender: string;
+  recipient: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface NftMintEventData {
+  asset_identifier: string;
+  recipient: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface NftBurnEventData {
+  asset_identifier: string;
+  sender: string;
+  value: unknown;
+  raw_value: string;
+}
+
+export interface FtTransferEventData {
+  asset_identifier: string;
+  sender: string;
+  recipient: string;
+  amount: string;
+}
+
+export interface FtMintEventData {
+  asset_identifier: string;
+  recipient: string;
+  amount: string;
+}
+
+export interface FtBurnEventData {
+  asset_identifier: string;
+  sender: string;
+  amount: string;
+}
+
+/**
+ * Discriminated union of every event variant the simulator emits.
+ * The `type` discriminator names the per-variant payload key — e.g.
+ * `type: 'contract_event'` carries the payload at `event.contract_event`.
+ *
+ * ```ts
+ * const event = parseSimulationEvent(receipt.events[0]);
+ * if (event.type === 'contract_event') {
+ *   // event.contract_event.{contract_identifier, topic, raw_value, value}
+ * }
+ * ```
+ */
+export type SimulationEvent =
+  | (SimulationEventBase & {
+      type: 'contract_event';
+      contract_event: SmartContractEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_transfer_event';
+      stx_transfer_event: StxTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_mint_event';
+      stx_mint_event: StxMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_burn_event';
+      stx_burn_event: StxBurnEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'stx_lock_event';
+      stx_lock_event: StxLockEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_transfer_event';
+      nft_transfer_event: NftTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_mint_event';
+      nft_mint_event: NftMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'nft_burn_event';
+      nft_burn_event: NftBurnEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_transfer_event';
+      ft_transfer_event: FtTransferEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_mint_event';
+      ft_mint_event: FtMintEventData;
+    })
+  | (SimulationEventBase & {
+      type: 'ft_burn_event';
+      ft_burn_event: FtBurnEventData;
+    });
+
+/** Convenience parser for `TransactionReceipt.events[i]`. */
+export function parseSimulationEvent(raw: string): SimulationEvent {
+  return JSON.parse(raw) as SimulationEvent;
 }
 
 // Read step types

@@ -29,6 +29,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   createSimulationSession,
+  parseSimulationEvent,
   type SimulationStepInput,
   submitSimulationSteps,
 } from '..';
@@ -174,15 +175,17 @@ scenario('counter contract — happy path', () => {
     // (ok u5)
     expect(receipt.result).toBe('070100000000000000000000000000000005');
 
-    // events[i] is a JSON-encoded *string* — JSON.parse to inspect.
+    // events[i] is a JSON-encoded *string*. Use parseSimulationEvent
+    // to JSON.parse + cast to the typed `SimulationEvent` union.
     expect(receipt.events).toHaveLength(1);
-    const event = JSON.parse(receipt.events[0]) as {
-      type: string;
-      contract_event: { topic: string; contract_identifier: string };
-    };
-    expect(event.type).toBe('contract_event');
+    const event = parseSimulationEvent(receipt.events[0]);
+    if (event.type !== 'contract_event') {
+      throw new Error(`expected contract_event, got ${event.type}`);
+    }
     expect(event.contract_event.topic).toBe('print');
     expect(event.contract_event.contract_identifier).toBe(CONTRACT_ID);
+    // raw_value is SIP-005 hex; deserializeCV() decodes to a Clarity Value.
+    expect(event.contract_event.raw_value.startsWith('0x')).toBe(true);
   });
 
   it('reads counter via DataVar after increment', async () => {
