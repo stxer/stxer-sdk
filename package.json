@@ -29,7 +29,8 @@
     "sample:instant": "tsx src/sample/instant.ts",
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts",
-    "sample:verify-types": "tsx src/sample/verify-types.ts"
+    "sample:verify-types": "tsx src/sample/verify-types.ts",
+    "sample:test": "vitest run src/sample/contract.test.ts"
   },
   "husky": {
     "hooks": {
@@ -67,7 +68,8 @@
     "husky": "^9.1.7",
     "size-limit": "12.1.0",
     "tsx": "^4.21.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "vitest": "^4.1.5"
   },
   "dependencies": {
     "@stacks/network": "^7.3.1",
