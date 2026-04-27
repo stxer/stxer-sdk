@@ -220,6 +220,28 @@ const sessionId = await createSimulationSession(
 );
 ```
 
+#### TransactionReceipt: failure signals & events
+
+When a step lands as `{ Transaction: { Ok: receipt } }`, the engine ran the transaction to completion — but that does **not** mean the contract logic succeeded. There are four distinct failure signals on or around a receipt; they are independent and must each be checked:
+
+| Signal | Where | Meaning |
+|---|---|---|
+| Outer `Err` | `Result.Transaction = { Err: string }` | Engine refused the tx (deserialization, etc.). No receipt is produced. |
+| `post_condition_aborted: true` | on the receipt | Execution ran, a post-condition tripped, state was rolled back. |
+| `vm_error: string` | on the receipt | Clarity VM raised a runtime error (overflow, unwrap on `none`, etc.). |
+| `(err uX)` inside `result` | on the receipt | Contract returned a Clarity error response. Not signalled by any flag — decode `result` to detect (response::err prefix is `08`). |
+
+`post_condition_aborted` and `vm_error` are independent and may both be set on the same receipt.
+
+**Events are JSON-encoded strings, not objects.** `receipt.events` is `string[]`; each entry is a JSON-encoded event payload. Call `JSON.parse(receipt.events[i])` to inspect — iterating without parsing yields opaque strings.
+
+```typescript
+for (const ev of receipt.events) {
+  const event = JSON.parse(ev) as { type: string; contract_event?: { ... } };
+  if (event.type === 'contract_event') { /* handle print/log */ }
+}
+```
+
 ### 3. Get Chain Tip
 
 Fetch the current chain tip information:
@@ -264,10 +286,10 @@ The SDK provides two approaches for efficient batch reading from the Stacks bloc
 #### Direct Batch Reading
 
 ```typescript
-import { batchRead } from 'stxer';
+import { batchRead, type BatchReadsResult } from 'stxer';
 
 // Batch read variables and maps
-const result = await batchRead({
+const result: BatchReadsResult = await batchRead({
   variables: [{
     contract: contractPrincipalCV(...),
     variableName: 'my-var'
@@ -283,6 +305,14 @@ const result = await batchRead({
     functionArgs: [/* clarity values */]
   }]
 });
+
+// Result shape — `index_block_hash` matches the upstream wire field
+// (the SDK previously aliased this as `tip`; renamed to remove the
+// indirection).
+result.index_block_hash;       // string — the block the batch ran against
+result.vars;                   // (ClarityValue | Error)[]
+result.maps;                   // (ClarityValue | Error)[]
+result.readonly;               // (ClarityValue | Error)[]
 ```
 
 #### BatchProcessor for Queue-based Operations
@@ -414,6 +444,28 @@ const ast = await getContractAST({
   contractId: 'SP...contract',
   stxerApi: STXER_API_MAINNET // Optional
 });
+```
+
+## Samples
+
+Runnable end-to-end examples live in [`src/sample/`](https://github.com/stxer/stxer-sdk/tree/master/src/sample) on GitHub. Samples track `master` and may evolve faster than published SDK versions; if you pin a specific SDK version, browse the matching git tag.
+
+| Sample | What it demonstrates |
+|---|---|
+| [`counter.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/counter.ts) | Full Simulation v2 lifecycle without `SimulationBuilder` — every `SimulationStepInput` variant (Transaction / Eval / SetContractCode / Reads / TenureExtend), narrowing on `SimulationStepResult`, and `SimulationStepSummary`. |
+| [`instant.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/instant.ts) | `instantSimulation` with all 7 `ReadStep` variants. |
+| [`failure-modes.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/failure-modes.ts) | The four failure signals on a `TransactionReceipt`, with bug-zoo triggers for each. |
+| [`batch-categories.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/batch-categories.ts) | Every `simulationBatchReads` category and the sidecar `batchRead`. |
+| [`contract-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/contract-vitest.test.ts) | Vitest suite that drives a Clarity contract through Simulation v2 — copy-pasteable CI test template. Pinned fork point so assertions stay deterministic. |
+| [`verify-types.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/verify-types.ts) | Runtime type-drift detector. Hits every endpoint, dereferences every documented field, asserts each value's runtime type matches the declared SDK type. Run it before publishing your client after upstream changes. |
+| [`read.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/read.ts) | `batchRead`, `BatchProcessor`, and the high-level `clarity-api` helpers (`callReadonly`, `readVariable`, `readMap`). |
+
+Run any of them locally by cloning the SDK repo and:
+
+```bash
+pnpm install
+pnpm sample:counter           # or sample:instant / failure-modes / batch-categories / verify-types
+pnpm sample:vitest            # run the Vitest contract-test sample
 ```
 
 ## API Reference
