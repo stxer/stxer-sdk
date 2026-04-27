@@ -1,4 +1,4 @@
-# stxer SDK
+# STXER SDK
 
 A powerful SDK for Stacks blockchain that provides transaction simulation, batch operations, contract AST parsing, and chain tip information.
 
