@@ -58,21 +58,21 @@
     }
   ],
   "devDependencies": {
-    "@biomejs/biome": "^2.3.11",
-    "@size-limit/preset-small-lib": "^12.0.0",
+    "@biomejs/biome": "2.4.13",
+    "@size-limit/preset-small-lib": "12.1.0",
     "@tsconfig/recommended": "^1.0.13",
-    "@types/node": "^25.0.9",
+    "@types/node": "25.6.0",
     "dts-cli": "^2.0.5",
     "husky": "^9.1.7",
-    "size-limit": "^12.0.0",
-    "tslib": "^2.8.1",
+    "size-limit": "12.1.0",
+    "tslib": "2.8.1",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "5.9.3"
   },
   "dependencies": {
     "@stacks/network": "^7.3.1",
     "@stacks/stacks-blockchain-api-types": "^7.14.1",
-    "@stacks/transactions": "^7.3.1",
+    "@stacks/transactions": "7.4.0",
     "c32check": "^2.0.0",
     "clarity-abi": "^0.1.0",
     "ts-clarity": "^0.1.1"
