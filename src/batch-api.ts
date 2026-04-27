@@ -31,6 +31,7 @@ export interface BatchReads {
 }
 
 export interface BatchReadsResult {
+  /** Index block hash the batch ran against (`index_block_hash` on the wire). */
   tip: string;
   vars: (ClarityValue | Error)[];
   maps: (ClarityValue | Error)[];
@@ -123,14 +124,14 @@ export async function batchRead(
   }
 
   const rs = JSON.parse(text) as {
-    tip: string;
+    index_block_hash: string;
     vars: ({ Ok: string } | { Err: string })[];
     maps: ({ Ok: string } | { Err: string })[];
     readonly: ({ Ok: string } | { Err: string })[];
   };
 
   return {
-    tip: rs.tip,
+    tip: rs.index_block_hash,
     vars: convertResults(rs.vars),
     maps: convertResults(rs.maps),
     readonly: convertResults(rs.readonly),

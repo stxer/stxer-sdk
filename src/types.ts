@@ -439,27 +439,39 @@ export interface SubmitSimulationStepsResponse {
 // Batch reads from simulation
 export interface SimulationBatchReadsRequest {
   /** `[contract_id, variable_name]` per entry. */
-  vars?: [string, string][];
+  vars?: [contract_id: string, variable_name: string][];
   /** `[contract_id, map_name, key_hex]` per entry. */
-  maps?: [string, string, string][];
+  maps?: [contract_id: string, map_name: string, key_hex: string][];
   /**
-   * `[contract_id, function_name, ...arg_hex]` per entry. Each subarray
-   * must have at least 2 elements; remaining elements are hex-encoded
-   * Clarity values for the function args.
+   * `[contract_id, function_name, ...arg_hex]` per entry. The first two
+   * positions are fixed; remaining elements are hex-encoded Clarity
+   * values, one per function argument (so the length matches the
+   * function's arity, not arbitrary).
    */
-  readonly?: string[][];
+  readonly?: [
+    contract_id: string,
+    function_name: string,
+    ...args_hex: string[],
+  ][];
   /**
    * `[sender, sponsor, contract_id, function_name, ...arg_hex]` per
-   * entry. Each subarray must have at least 4 elements; `sponsor` is
-   * `""` when there is no sponsor.
+   * entry. The first four positions are fixed (`sponsor` is `""` when
+   * there is no sponsor); remaining elements are hex-encoded Clarity
+   * values, one per function argument.
    */
-  readonly_with_sender?: string[][];
+  readonly_with_sender?: [
+    sender: string,
+    sponsor: string,
+    contract_id: string,
+    function_name: string,
+    ...args_hex: string[],
+  ][];
   /** Principals to read STX balances for. */
   stx?: string[];
   /** Principals to read nonces for. */
   nonces?: string[];
   /** `[<contract_id>::<token_name>, principal]` per entry. */
-  ft_balance?: [string, string][];
+  ft_balance?: [token_identifier: string, principal: string][];
   /**
    * Flat array of FT identifiers in `<contract_id>::<token_name>` form,
    * one entry per token to look up. Any length.
