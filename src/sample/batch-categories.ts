@@ -8,8 +8,9 @@
  *     `ft_supply: string[]`, and defensive iteration over the optional
  *     response keys.
  *
- *   - `batchRead({ ... })` against the sidecar shows that `result.tip`
- *     is now populated (parsed from the wire field `index_block_hash`).
+ *   - `batchRead({ ... })` against the sidecar exposes
+ *     `result.index_block_hash` (renamed from the previous SDK field
+ *     `tip`, which was undefined on the wire and silently broken).
  */
 import {
   contractPrincipalCV,
@@ -137,9 +138,9 @@ async function sidecarBatchReadExample() {
   });
 
   console.log('--- batchRead (sidecar) ---');
-  // result.tip is parsed from the wire field `index_block_hash`; used
-  // to be silently `undefined` before the SDK fix.
-  console.log(`tip: ${result.tip || '<empty>'}`);
+  // result.index_block_hash matches the upstream wire field; used to be
+  // exposed as `tip` and silently `undefined` before the SDK fix.
+  console.log(`index_block_hash: ${result.index_block_hash || '<empty>'}`);
   console.log(`vars: ${result.vars.length}`);
   console.log(`maps: ${result.maps.length}`);
   console.log(`readonly: ${result.readonly.length}`);

@@ -490,7 +490,10 @@ async function checkSidecarBatch() {
       },
     ],
   });
-  check('sidecar.tip: hex(64)', isHex(result.tip, 64));
+  check(
+    'sidecar.index_block_hash: hex(64)',
+    isHex(result.index_block_hash, 64),
+  );
   check('sidecar.vars: array', Array.isArray(result.vars));
   check('sidecar.maps: array', Array.isArray(result.maps));
   check('sidecar.readonly: array', Array.isArray(result.readonly));

@@ -31,8 +31,8 @@ export interface BatchReads {
 }
 
 export interface BatchReadsResult {
-  /** Index block hash the batch ran against (`index_block_hash` on the wire). */
-  tip: string;
+  /** Index block hash the batch ran against. Matches the wire field name. */
+  index_block_hash: string;
   vars: (ClarityValue | Error)[];
   maps: (ClarityValue | Error)[];
   readonly: (ClarityValue | Error)[];
@@ -123,20 +123,15 @@ export async function batchRead(
     );
   }
 
-  // The current stxer-api proxy renames the upstream rust field
-  // `index_block_hash` to the semantic name `tip`; older deployments
-  // still emit `index_block_hash` directly. Read whichever is present
-  // so the SDK works against both.
   const rs = JSON.parse(text) as {
-    tip?: string;
-    index_block_hash?: string;
+    index_block_hash: string;
     vars?: ({ Ok: string } | { Err: string })[];
     maps?: ({ Ok: string } | { Err: string })[];
     readonly?: ({ Ok: string } | { Err: string })[];
   };
 
   return {
-    tip: rs.tip ?? rs.index_block_hash ?? '',
+    index_block_hash: rs.index_block_hash,
     vars: convertResults(rs.vars),
     maps: convertResults(rs.maps),
     readonly: convertResults(rs.readonly),
