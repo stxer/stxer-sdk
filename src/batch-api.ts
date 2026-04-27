@@ -45,10 +45,10 @@ export interface BatchApiOptions {
 const DEFAULT_STXER_API = 'https://api.stxer.xyz';
 
 function convertResults(
-  rs: ({ Ok: string } | { Err: string })[],
+  rs: ({ Ok: string } | { Err: string })[] | undefined,
 ): (ClarityValue | Error)[] {
   const results: (ClarityValue | Error)[] = [];
-  for (const v of rs) {
+  for (const v of rs ?? []) {
     if ('Ok' in v) {
       results.push(deserializeCV(v.Ok));
     } else {
@@ -125,9 +125,9 @@ export async function batchRead(
 
   const rs = JSON.parse(text) as {
     index_block_hash: string;
-    vars: ({ Ok: string } | { Err: string })[];
-    maps: ({ Ok: string } | { Err: string })[];
-    readonly: ({ Ok: string } | { Err: string })[];
+    vars?: ({ Ok: string } | { Err: string })[];
+    maps?: ({ Ok: string } | { Err: string })[];
+    readonly?: ({ Ok: string } | { Err: string })[];
   };
 
   return {
