@@ -11,6 +11,12 @@
  * Tests hit https://api.stxer.xyz; they need network and spend a few
  * seconds per session. Set STXER_SKIP_NETWORK_TESTS=1 to skip in
  * offline / CI-without-internet environments.
+ *
+ * The fork point and starting nonce are pinned to a settled mainnet
+ * block so the chain state the simulator forks from is identical on
+ * every run — assertions on receipt.result and event hex stay
+ * deterministic. Bump the constants below when the upstream prunes
+ * the snapshot.
  */
 import { STACKS_MAINNET } from '@stacks/network';
 import {
@@ -23,11 +29,10 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   createSimulationSession,
-  getTip,
   type SimulationStepInput,
   submitSimulationSteps,
 } from '..';
-import { bytesToHex, getNonce, setSender } from './_helpers';
+import { bytesToHex, setSender } from './_helpers';
 
 const SKIP = process.env.STXER_SKIP_NETWORK_TESTS === '1';
 const scenario = SKIP ? describe.skip : describe;
@@ -35,6 +40,14 @@ const scenario = SKIP ? describe.skip : describe;
 const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 const CONTRACT_NAME = 'counter-under-test';
 const CONTRACT_ID = `${SENDER}.${CONTRACT_NAME}`;
+
+// Pinned mainnet fork point. SENDER's nonce at this index_block_hash is
+// FIXED_NONCE — verified once via Hiro and hardcoded so the test is
+// self-contained.
+const FIXED_BLOCK_HEIGHT = 7_760_000;
+const FIXED_BLOCK_HASH =
+  'f1c3927e12edec74aa05e7e8fa99a6d2e4b97f9b8566389aebd8a1c8a4926698';
+const FIXED_NONCE = 10n;
 
 const SOURCE = `
 (define-data-var counter uint u0)
@@ -65,13 +78,12 @@ interface Session {
 }
 
 async function setupSession(): Promise<Session> {
-  const tip = await getTip();
   const id = await createSimulationSession({
-    block_height: tip.block_height,
-    block_hash: tip.block_hash,
+    block_height: FIXED_BLOCK_HEIGHT,
+    block_hash: FIXED_BLOCK_HASH,
     skip_tracing: true,
   });
-  let nonce = await getNonce(SENDER, tip.index_block_hash);
+  let nonce = FIXED_NONCE;
 
   const deployTx = await makeUnsignedContractDeploy({
     contractName: CONTRACT_NAME,
