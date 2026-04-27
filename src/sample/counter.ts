@@ -41,6 +41,22 @@ const SOURCE = `
   (ok (var-get counter)))
 `;
 
+// Replacement source patched in via SetContractCode mid-session: doubles
+// the increment delta so we can observe the rewritten behavior on the
+// next call.
+const SOURCE_DOUBLED = `
+(define-data-var counter uint u0)
+
+(define-public (increment (delta uint))
+  (begin
+    (print { event: "increment-doubled", delta: delta })
+    (var-set counter (+ (var-get counter) (* delta u2)))
+    (ok (var-get counter))))
+
+(define-read-only (get-counter)
+  (ok (var-get counter)))
+`;
+
 async function main() {
   const tip = await getTip();
   console.log(`tip @ block ${tip.block_height}`);
@@ -66,29 +82,54 @@ async function main() {
   });
   setSender(deployTx, SENDER);
 
-  const incrementTx = await makeUnsignedContractCall({
-    contractAddress: SENDER,
-    contractName: CONTRACT_NAME,
-    functionName: 'increment',
-    functionArgs: [uintCV(10)],
-    nonce: nonce++,
-    network: STACKS_MAINNET,
-    publicKey: '',
-    postConditionMode: PostConditionMode.Allow,
-    fee: 0,
-  });
-  setSender(incrementTx, SENDER);
+  const buildIncrement = async (delta: number) => {
+    const tx = await makeUnsignedContractCall({
+      contractAddress: SENDER,
+      contractName: CONTRACT_NAME,
+      functionName: 'increment',
+      functionArgs: [uintCV(delta)],
+      nonce: nonce++,
+      network: STACKS_MAINNET,
+      publicKey: '',
+      postConditionMode: PostConditionMode.Allow,
+      fee: 0,
+    });
+    setSender(tx, SENDER);
+    return bytesToHex(tx.serializeBytes());
+  };
 
   // Each entry exercises one variant of `SimulationStepInput`.
   const steps: SimulationStepInput[] = [
     { Transaction: bytesToHex(deployTx.serializeBytes()) },
     // Eval — labeled tuple [sender, sponsor, contract_id, code]; "" sponsor when none.
     { Eval: [SENDER, '', CONTRACT_ID, '(get-counter)'] },
-    { Transaction: bytesToHex(incrementTx.serializeBytes()) },
+    { Transaction: await buildIncrement(10) },
     { Eval: [SENDER, '', CONTRACT_ID, '(get-counter)'] },
-    // Reads — each entry is a tagged read step (`MapEntry`, `DataVar`, etc.).
+    // SetContractCode — labeled tuple [contract_id, source_code, clarity_version].
+    // Replaces the contract source in-place so the next increment runs
+    // the patched logic.
+    { SetContractCode: [CONTRACT_ID, SOURCE_DOUBLED, 3] },
+    { Transaction: await buildIncrement(10) },
+    { Eval: [SENDER, '', CONTRACT_ID, '(get-counter)'] },
+    // Reads — each entry is a tagged read step. All 7 read shapes are
+    // exercised here so every `ReadStep` variant has wire coverage.
     {
-      Reads: [{ DataVar: [CONTRACT_ID, 'counter'] }, { Nonce: SENDER }],
+      Reads: [
+        { DataVar: [CONTRACT_ID, 'counter'] },
+        { Nonce: SENDER },
+        { StxBalance: SENDER },
+        {
+          EvalReadonly: [SENDER, '', CONTRACT_ID, '(get-counter)'],
+        },
+        // The vanity sender owns no FTs / map entries on the deployed
+        // counter, so these will return Err — which is exactly what we
+        // want: it confirms the SDK narrows on `Err` cleanly.
+        // Map key is a hex-serialized Clarity value; `09` is `(none)`,
+        // the shortest valid placeholder.
+        { MapEntry: [CONTRACT_ID, 'no-such-map', '09'] },
+        { FtBalance: [CONTRACT_ID, 'no-such-ft', SENDER] },
+        { FtSupply: [CONTRACT_ID, 'no-such-ft'] },
+      ],
     },
     // TenureExtend — empty tuple; result variant carries the running cost.
     { TenureExtend: [] },
@@ -131,14 +172,38 @@ async function main() {
     }
   }
 
-  // The GET endpoint returns a *summary* — different shape, includes
-  // each step's original input alongside the result.
+  // The GET endpoint returns a *summary* — different shape from the
+  // POST response: each step carries its original input alongside the
+  // result. Narrow on the `SimulationStepSummary` discriminated union.
   const summary = await getSimulationResult(simulationId);
   console.log(
-    `summary: ${summary.steps.length} steps, epoch ${summary.metadata.epoch}`,
+    `\nsummary: ${summary.steps.length} steps @ block ${summary.metadata.block_height} (epoch ${summary.metadata.epoch})`,
   );
+  for (const [i, s] of summary.steps.entries()) {
+    if ('Transaction' in s) {
+      // TransactionStepSummary — original tx hex + TxId + Result + ExecutionCost.
+      // TxId is `""` (empty string) when the tx failed engine-level.
+      console.log(
+        `  #${i} Transaction txid=${s.TxId.slice(0, 10) || '<none>'}… runtime_us=${s.ExecutionCost.runtime}`,
+      );
+    } else if ('Reads' in s) {
+      // ReadsStepSummary — original ReadStep[] + Result.Reads[]
+      console.log(`  #${i} Reads (${s.Reads.length} read steps)`);
+    } else if ('SetContractCode' in s) {
+      // SetContractCodeStepSummary — labeled tuple [contract_id, code, version]
+      const [contractId, , version] = s.SetContractCode;
+      console.log(`  #${i} SetContractCode ${contractId} (clarity ${version})`);
+    } else if ('Eval' in s) {
+      // EvalStepSummary — labeled tuple [sender, sponsor, contract_id, code]
+      const [, , , code] = s.Eval;
+      console.log(`  #${i} Eval ${code}`);
+    } else {
+      // TenureExtendStepSummary — only the Result is present.
+      console.log(`  #${i} TenureExtend cost`, s.Result.TenureExtend);
+    }
+  }
   console.log(
-    `view trace: https://stxer.xyz/simulations/mainnet/${simulationId}`,
+    `\nview trace: https://stxer.xyz/simulations/mainnet/${simulationId}`,
   );
 }
 

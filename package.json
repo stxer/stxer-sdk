@@ -26,6 +26,7 @@
     "test": "dts test",
     "sample:counter": "tsx src/sample/counter.ts",
     "sample:read": "tsx src/sample/read.ts",
+    "sample:instant": "tsx src/sample/instant.ts",
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts"
   },

@@ -69,7 +69,7 @@ export async function instantSimulation(
   const apiEndpoint = options.stxerApi ?? DEFAULT_STXER_API;
 
   const response = await fetch(
-    `${apiEndpoint}/devtools/v2/simulation:instant`,
+    `${apiEndpoint}/devtools/v2/simulations:instant`,
     {
       method: 'POST',
       body: JSON.stringify(request),
