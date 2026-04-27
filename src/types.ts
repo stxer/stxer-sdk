@@ -377,7 +377,6 @@ export type SimulationStepSummary =
 
 // Simulation metadata
 export interface SimulationMetadata {
-  ast_rules: 0 | 1;
   block_height: number;
   block_hash: string;
   burn_block_height: number;

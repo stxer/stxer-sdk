@@ -123,15 +123,20 @@ export async function batchRead(
     );
   }
 
+  // The current stxer-api proxy renames the upstream rust field
+  // `index_block_hash` to the semantic name `tip`; older deployments
+  // still emit `index_block_hash` directly. Read whichever is present
+  // so the SDK works against both.
   const rs = JSON.parse(text) as {
-    index_block_hash: string;
+    tip?: string;
+    index_block_hash?: string;
     vars?: ({ Ok: string } | { Err: string })[];
     maps?: ({ Ok: string } | { Err: string })[];
     readonly?: ({ Ok: string } | { Err: string })[];
   };
 
   return {
-    tip: rs.index_block_hash,
+    tip: rs.tip ?? rs.index_block_hash ?? '',
     vars: convertResults(rs.vars),
     maps: convertResults(rs.maps),
     readonly: convertResults(rs.readonly),
