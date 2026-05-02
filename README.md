@@ -79,7 +79,15 @@ const simulationId = await SimulationBuilder.new({
 
 #### Advanced V2 Step Types
 
-The SDK supports all V2 simulation step types:
+The SDK supports all V2 simulation step types. Three of them — `Transaction`, `Eval`, and `EvalReadonly` (a `Reads` sub-type) — all execute Clarity but differ on side-effects, cost, and what they emit. Pick by **what you need to come out of the step**:
+
+| Step | Side effects | Receipt + events | Fee / nonce | Post-conditions | When to use |
+|---|---|---|---|---|---|
+| `Transaction` | full tx execution | ✅ `TransactionReceipt` | ✅ | ✅ | Simulating a real user action; need a receipt; want PCs enforced |
+| `Eval` | **write access** | ❌ | ❌ | ❌ | Stub state mid-session, run code with side-effects without tx ceremony |
+| `EvalReadonly` (in `Reads`) | none — analyzer-enforced read-only | ❌ | ❌ | ❌ | Read-only contract calls / projections / custom expressions that need sender-context |
+
+Cost order, cheapest first: `EvalReadonly` < `Eval` < `Transaction`. Use the cheapest variant that gives you what you need — running a `(var-get counter)` projection through `Eval` is wasteful when an `EvalReadonly` (or a plain `DataVar` read) gets the same answer for less.
 
 ```typescript
 import { SimulationBuilder } from 'stxer';
@@ -106,11 +114,11 @@ const simulationId = await SimulationBuilder.new()
     clarity_version: ClarityVersion.Clarity4,
   })
 
-  // === Eval Steps ===
-  // Read state
-  .addEvalCode('SP...contract', '(var-get counter)')
-
-  // Modify state
+  // === Eval Step (write access, no tx ceremony) ===
+  // Use Eval when you need to mutate contract state WITHOUT a real tx —
+  // no fee, no nonce, no post-conditions, no receipt; just the Clarity
+  // value or err. For pure reads, prefer the `Reads` batch below
+  // (`EvalReadonly` is cheaper and analyzer-enforced read-only).
   .addEvalCode('SP...contract', '(var-set counter u100)')
 
   // === SetContractCode Step ===
@@ -122,13 +130,24 @@ const simulationId = await SimulationBuilder.new()
   })
 
   // === Reads Batch Step ===
-  // Batch multiple read operations in a single step
+  // Batch multiple read operations into one step. `EvalReadonly` is the
+  // sender-context read variant — analyzer-enforced no writes; use it
+  // for read-only contract calls / projections / custom expressions
+  // that need a specific sender principal in scope.
   .addReads([
     { DataVar: ['SP...contract', 'counter'] },
     { DataVar: ['SP...contract', 'enabled'] },
     { StxBalance: 'SP...' },
     { Nonce: 'SP...' },
     { EvalReadonly: ['SP...', '', 'SP...contract', '(get-counter)'] },
+    {
+      EvalReadonly: [
+        'SP...',
+        '',
+        'SP...oracle',
+        "(contract-call? .oracle get-value 'STX-USD)",
+      ],
+    },
   ])
 
   // === TenureExtend Step ===

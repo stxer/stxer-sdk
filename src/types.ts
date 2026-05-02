@@ -495,6 +495,31 @@ export interface DataVarStep {
   DataVar: [contract_id: string, variable_name: string];
 }
 
+/**
+ * Evaluate an arbitrary read-only Clarity expression in the context of
+ * `sender` (and optional `sponsor`). The Clarity analyzer rejects any
+ * expression that would mutate state, so this is a pure projection.
+ *
+ * Use when a plain `DataVar` / `MapEntry` read isn't enough — read-only
+ * `contract-call?` projections, custom expressions, or anything that
+ * needs a specific sender principal in scope. Cheaper than `Eval` (no
+ * write access, no step slot) and the only sender-context read shape.
+ *
+ * Choosing between read variants:
+ *   - `DataVar` / `MapEntry` — direct storage reads, no Clarity
+ *     evaluation; cheapest.
+ *   - `EvalReadonly` — arbitrary read-only Clarity in sender/sponsor
+ *     context; analyzer-enforced no writes.
+ *   - `Eval` (top-level step variant on {@link SimulationStepInput},
+ *     NOT a Reads sub-type) — arbitrary Clarity with **write access**.
+ *     Use only when you need to mutate state.
+ *   - `Transaction` — real Stacks tx with receipt, events,
+ *     post-conditions, fee, nonce.
+ *
+ * @example
+ *   { EvalReadonly: ['SP...sender', '', 'SP...contract', '(get-counter)'] }
+ *   { EvalReadonly: ['SP...sender', '', 'SP...oracle', "(contract-call? .oracle get-value 'STX-USD)"] }
+ */
 export interface EvalReadonlyStep {
   /** `sponsor` is `""` (empty string) when there is no sponsor. */
   EvalReadonly: [
@@ -640,8 +665,8 @@ export interface SimulationTipResponse {
 
 /**
  * Per-step result returned by `POST /devtools/v2/simulations/{id}` (the
- * "submit steps" endpoint). Mirrors the rust `RunSimulationStepResult`
- * enum — externally tagged, exactly one variant key present.
+ * "submit steps" endpoint). Externally tagged — exactly one variant key
+ * is present per object.
  *
  * Distinct from `SimulationStepSummary`, which is what
  * `GET /devtools/v2/simulations/{id}` returns and includes the original
@@ -764,13 +789,39 @@ export interface CreateSimulationResponse {
   id: string;
 }
 
-// Submit steps request
-//
-// `TenureExtend` accepts both legacy `[]` (treated server-side as
-// `cause: 'Extended'`) and modern `{ cause }` shapes. SDK 0.8.0 emits
-// the modern form via {@link SimulationBuilder.addTenureExtend}; the
-// legacy shape stays in this union so consumers passing literal step
-// objects (not via the builder) still type-check.
+/**
+ * One step submitted to `POST /devtools/v2/simulations/{id}`. Tagged
+ * union — exactly one variant key per object.
+ *
+ * **Picking the right Clarity-execution shape** — `Transaction` /
+ * `Eval` / `Reads` differ on side-effects, cost, and what they emit:
+ *
+ *   - `Transaction` — full Stacks tx mechanics. Generates a
+ *     `TransactionReceipt` (events, vm_error, post_condition_aborted,
+ *     execution_cost), consumes nonce, charges fee, enforces
+ *     post-conditions. The only variant that emits a receipt. Use when
+ *     simulating a real user action.
+ *   - `Eval` — arbitrary Clarity with **write access** to contract
+ *     storage; no fee, no nonce, no post-conditions, no receipt — just
+ *     the resulting Clarity value or err. Use to stub state mid-session
+ *     (`var-set`, `map-set`, …) or run code with side-effects without
+ *     tx ceremony.
+ *   - `Reads` (batch of {@link ReadStep}, including `EvalReadonly`) —
+ *     pure projection, no state changes, cheapest. Use when you only
+ *     need to read derived data; `EvalReadonly` provides the
+ *     sender/sponsor context that `DataVar` / `MapEntry` cannot.
+ *
+ * `SetContractCode` replaces a contract's code (write side-effects, no
+ * fee/nonce/receipt — like `Eval` but at the contract level).
+ * `TenureExtend` resets cost dimensions. `AdvanceBlocks` synthesizes
+ * burn/stacks blocks (see {@link AdvanceBlocksRequest}).
+ *
+ * `TenureExtend` accepts both legacy `[]` (treated server-side as
+ * `cause: 'Extended'`) and modern `{ cause }` shapes. SDK 0.8.0 emits
+ * the modern form via {@link SimulationBuilder.addTenureExtend}; the
+ * legacy shape stays in this union so consumers passing literal step
+ * objects (not via the builder) still type-check.
+ */
 export type SimulationStepInput =
   | { Transaction: string }
   | {
