@@ -201,7 +201,7 @@ export class SimulationBuilder {
       ...params,
       deployer: params.deployer ?? this.sender,
       fee: params.fee ?? 0,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
     });
     return this;
   }
@@ -239,7 +239,7 @@ export class SimulationBuilder {
       type: 'SetContractCode',
       contract_id: params.contract_id,
       source_code: params.source_code,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
     });
     return this;
   }
@@ -502,8 +502,10 @@ function clarityVersionToNumber(version: ClarityVersion): number {
       return 3;
     case ClarityVersion.Clarity4:
       return 4;
+    case ClarityVersion.Clarity5:
+      return 5;
     default:
-      return 4;
+      return 5;
   }
 }
 

@@ -50,7 +50,7 @@ export async function getContractAST(
 export interface ParseContractOptions extends AstOptions {
   sourceCode: string;
   contractId: string;
-  clarityVersion?: '1' | '2' | '3' | '4';
+  clarityVersion?: '1' | '2' | '3' | '4' | '5';
   epoch?: ClarityEpoch;
 }
 

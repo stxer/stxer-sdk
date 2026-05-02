@@ -131,23 +131,24 @@ export type ClarityEpoch =
  * (`/contracts:parse-ast`). Used in {@link ClarityAbi.clarity_version}.
  *
  * **Distinct from the numeric `ClarityVersion` enum re-exported by
- * `@stacks/transactions`** (1 / 2 / 3 / 4), which is what the SDK
- * builder methods (`addContractDeploy`, `makeUnsignedContractDeploy`,
- * etc.) accept. To build transactions:
+ * `@stacks/transactions`** (1..5), which is what the SDK builder
+ * methods (`addContractDeploy`, `makeUnsignedContractDeploy`, etc.)
+ * accept. To build transactions:
  *
  *     import { ClarityVersion } from '@stacks/transactions';
- *     // ClarityVersion.Clarity4 -> 4
+ *     // ClarityVersion.Clarity5 -> 5
  *
  * To check an AST response:
  *
  *     import type { ClarityVersionName } from 'stxer';
- *     if (abi.clarity_version === 'Clarity4') { ... }
+ *     if (abi.clarity_version === 'Clarity5') { ... }
  */
 export type ClarityVersionName =
   | 'Clarity1'
   | 'Clarity2'
   | 'Clarity3'
-  | 'Clarity4';
+  | 'Clarity4'
+  | 'Clarity5';
 
 /** @deprecated Renamed to {@link ClarityVersionName} in 0.8.0 to avoid collision with `@stacks/transactions`'s numeric `ClarityVersion` enum. Re-exported for back-compat — will be removed in a future major. */
 export type ClarityVersion = ClarityVersionName;
