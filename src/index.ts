@@ -7,7 +7,6 @@ export * from './batch-api';
 export * from './bitcoin';
 export * from './clarity-api';
 export * from './constants';
-export * from './sim-helpers';
 export * from './simulation';
 export * from './simulation-api';
 export * from './tip';
