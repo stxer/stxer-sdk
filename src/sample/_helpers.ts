@@ -1,58 +1,49 @@
 /**
- * Tiny helpers shared by the v2 samples. Inline-equivalent to what
- * SimulationBuilder does internally — extracted here so each sample
- * can lean on the typed v2 surface without pulling in the builder.
+ * Sample-only helpers — env-driven endpoint resolution and a Stacks
+ * nonce lookup. Everything else the samples use is imported directly
+ * from the SDK barrel (`'..'`).
  */
-import {
-  AddressHashMode,
-  AddressVersion,
-  type MultiSigSpendingCondition,
-  type StacksTransactionWire,
-} from '@stacks/transactions';
-import { c32addressDecode } from 'c32check';
+import { STXER_API_MAINNET } from '../constants';
+import type { SimulationApiOptions } from '../simulation-api';
 
-export function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
+const STACKS_API_DEFAULT = 'https://api.hiro.so';
 
 /**
- * Rewrite an unsigned transaction's spending condition so the upstream
- * simulator treats `sender` as the origin without requiring a real
- * signature. Mirrors the helper inside SimulationBuilder.
+ * Read `STXER_API` from the environment and return it as a
+ * {@link SimulationApiOptions} value. Falls back to mainnet
+ * (`https://api.stxer.xyz`) when the env var is unset, matching the
+ * SDK's own default.
  */
-export function setSender(tx: StacksTransactionWire, sender: string) {
-  const [addressVersion, signer] = c32addressDecode(sender);
-  switch (addressVersion) {
-    case AddressVersion.MainnetSingleSig:
-    case AddressVersion.TestnetSingleSig:
-      tx.auth.spendingCondition.hashMode = AddressHashMode.P2PKH;
-      tx.auth.spendingCondition.signer = signer;
-      break;
-    case AddressVersion.MainnetMultiSig:
-    case AddressVersion.TestnetMultiSig: {
-      const sc = tx.auth.spendingCondition;
-      tx.auth.spendingCondition = {
-        hashMode: AddressHashMode.P2SH,
-        signer,
-        fields: [],
-        signaturesRequired: 0,
-        nonce: sc.nonce,
-        fee: sc.fee,
-      } as MultiSigSpendingCondition;
-      break;
-    }
-  }
-  return tx;
-}
+export const apiOptions = (): SimulationApiOptions => ({
+  stxerApi: process.env.STXER_API ?? STXER_API_MAINNET,
+});
 
-/** Look up the sender's current nonce on mainnet (Hiro public node). */
-export async function getNonce(
+/**
+ * Stacks node / extended-API endpoint used by the samples for
+ * non-simulator lookups (block info, nonces, etc.). Reads the
+ * `STACKS_API` env var so a custom run can point this at a stacks-api
+ * co-located with the same chainstate the simulator is using; defaults
+ * to the public Hiro node otherwise.
+ */
+export const stacksApi = (): string =>
+  process.env.STACKS_API ?? STACKS_API_DEFAULT;
+
+/**
+ * Look up `sender`'s on-chain nonce at the given `indexBlockHash` via
+ * the Stacks node API selected by {@link stacksApi}. Used by samples
+ * that build `instantSimulation` transactions before any simulation
+ * session exists — once a session is in flight, prefer the SDK's
+ * session-bound `getNonce(sessionId, principal)` from `'stxer'`
+ * instead.
+ *
+ * Named `getOnChainNonce` to avoid collision with the SDK-exported
+ * `getNonce(sessionId, principal, options)` (different signature).
+ */
+export async function getOnChainNonce(
   sender: string,
   indexBlockHash: string,
 ): Promise<bigint> {
-  const url = `https://api.hiro.so/v2/accounts/${sender}?proof=false&tip=${indexBlockHash}`;
+  const url = `${stacksApi()}/v2/accounts/${sender}?proof=false&tip=${indexBlockHash}`;
   const r = await fetch(url);
   if (!r.ok) {
     throw new Error(`failed to fetch nonce for ${sender}: ${r.status}`);

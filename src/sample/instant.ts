@@ -19,8 +19,14 @@ import {
   tupleCV,
   uintCV,
 } from '@stacks/transactions';
-import { getTip, instantSimulation, type ReadStep } from '..';
-import { bytesToHex, getNonce, setSender } from './_helpers';
+import {
+  bytesToHex,
+  getTip,
+  instantSimulation,
+  type ReadStep,
+  setSender,
+} from '..';
+import { getOnChainNonce } from './_helpers';
 
 const ALEX_TOKEN = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.token-alex';
 const ALEX_VAULT = 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM.amm-vault-v2-01';
@@ -30,7 +36,7 @@ const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 
 async function main() {
   const tip = await getTip();
-  const nonce = await getNonce(SENDER, tip.index_block_hash);
+  const nonce = await getOnChainNonce(SENDER, tip.index_block_hash);
 
   // Contract-call tx hitting a read-only function — produces a receipt
   // with no state change (so a no-asset sender is fine).

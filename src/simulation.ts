@@ -1,54 +1,31 @@
 import {
-  AddressVersion,
   STACKS_MAINNET,
   STACKS_TESTNET,
   type StacksNetworkName,
 } from '@stacks/network';
 import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
-  AddressHashMode,
   type ClarityValue,
   ClarityVersion,
-  type MultiSigSpendingCondition,
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
   PostConditionMode,
-  type StacksTransactionWire,
 } from '@stacks/transactions';
-import { c32addressDecode } from 'c32check';
 import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
+import { bytesToHex } from './bitcoin';
 import { STXER_API_MAINNET, STXER_API_TESTNET } from './constants';
 import {
   createSimulationSession,
   submitSimulationSteps,
 } from './simulation-api';
-import type { ReadStep, SimulationStepInput } from './types';
-
-function setSender(tx: StacksTransactionWire, sender: string) {
-  const [addressVersion, signer] = c32addressDecode(sender);
-  switch (addressVersion) {
-    case AddressVersion.MainnetSingleSig:
-    case AddressVersion.TestnetSingleSig:
-      tx.auth.spendingCondition.hashMode = AddressHashMode.P2PKH;
-      tx.auth.spendingCondition.signer = signer;
-      break;
-    case AddressVersion.MainnetMultiSig:
-    case AddressVersion.TestnetMultiSig: {
-      const sc = tx.auth.spendingCondition;
-      tx.auth.spendingCondition = {
-        hashMode: AddressHashMode.P2SH,
-        signer,
-        fields: [],
-        signaturesRequired: 0,
-        nonce: sc.nonce,
-        fee: sc.fee,
-      } as MultiSigSpendingCondition;
-      break;
-    }
-  }
-  return tx;
-}
+import { setSender } from './transaction';
+import type {
+  AdvanceBlocksRequest,
+  ReadStep,
+  SimulationStepInput,
+  TenureExtendCause,
+} from './types';
 
 export interface SimulationEval {
   contract_id: string;
@@ -85,8 +62,7 @@ export class SimulationBuilder {
     return new SimulationBuilder(options);
   }
 
-  // biome-ignore lint/style/useNumberNamespace: ignore this
-  private block = NaN;
+  private block = Number.NaN;
   private sender = '';
   private steps: (
     | {
@@ -132,6 +108,12 @@ export class SimulationBuilder {
     | {
         // TenureExtend - V2 native step type
         type: 'TenureExtend';
+        cause: TenureExtendCause;
+      }
+    | {
+        // AdvanceBlocks - V2 native step type, synthesizes blocks
+        type: 'AdvanceBlocks';
+        request: AdvanceBlocksRequest;
       }
   )[] = [];
 
@@ -258,9 +240,47 @@ export class SimulationBuilder {
     return this;
   }
 
-  public addTenureExtend() {
+  /**
+   * Add a `TenureExtend` step. Defaults to `cause: 'Extended'` (full
+   * cost reset) — equivalent in server-side behavior to the legacy
+   * zero-arg call.
+   *
+   * Pass an explicit `TenureExtendCause` to reset only one SIP-034
+   * dimension (`ExtendedRuntime` / `ExtendedReadCount` / etc.).
+   *
+   * On the wire SDK 0.8.0 emits the modern `{ TenureExtend: { cause } }`
+   * shape. The server still parses the legacy `[]` shape for any
+   * caller emitting raw step objects.
+   */
+  public addTenureExtend(cause: TenureExtendCause = 'Extended') {
     this.steps.push({
       type: 'TenureExtend',
+      cause,
+    });
+    return this;
+  }
+
+  /**
+   * Synthesize bitcoin and stacks blocks on top of the simulation's
+   * pinned parent tip. Used to model burn-block / tenure boundaries
+   * (bridge contracts, time-locked redemptions, locked-STX unlock).
+   *
+   * The simulator validates the request shape; older simulator builds
+   * that don't yet support `AdvanceBlocks` reject this variant with
+   * HTTP 400.
+   *
+   * @example
+   * ```typescript
+   * builder.addAdvanceBlocks({
+   *   bitcoin_blocks: 1,
+   *   stacks_blocks_per_bitcoin: 1,
+   * });
+   * ```
+   */
+  public addAdvanceBlocks(request: AdvanceBlocksRequest) {
+    this.steps.push({
+      type: 'AdvanceBlocks',
+      request,
     });
     return this;
   }
@@ -414,9 +434,15 @@ To get in touch: contact@stxer.xyz
           Reads: step.reads,
         });
       } else if (step.type === 'TenureExtend') {
-        // TenureExtend - format: []
+        // TenureExtend - modern wire shape (legacy `[]` is still parsed
+        // server-side for direct-emit consumers, but the builder always
+        // emits the explicit cause).
         v2Steps.push({
-          TenureExtend: [],
+          TenureExtend: { cause: step.cause },
+        });
+      } else if (step.type === 'AdvanceBlocks') {
+        v2Steps.push({
+          AdvanceBlocks: step.request,
         });
       } else {
         console.log(`Invalid simulation step: ${step}`);
@@ -451,13 +477,6 @@ To get in touch: contact@stxer.xyz
   ): SimulationBuilder {
     return transform(this);
   }
-}
-
-// Helper function to convert Uint8Array to hex string
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }
 
 // Helper function to convert ClarityVersion to number

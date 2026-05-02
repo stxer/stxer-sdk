@@ -1,6 +1,6 @@
 {
   "name": "stxer",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "license": "MIT",
   "author": "Kyle Fang",
   "repository": {
@@ -14,7 +14,8 @@
     "dist",
     "src",
     "!src/sample",
-    "!dist/sample"
+    "!dist/sample",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "analyze": "size-limit --why",
@@ -30,7 +31,7 @@
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts",
     "sample:verify-types": "tsx src/sample/verify-types.ts",
-    "sample:vitest": "vitest run src/sample/contract-vitest.test.ts"
+    "sample:vitest": "vitest run"
   },
   "husky": {
     "hooks": {
@@ -60,7 +61,7 @@
     }
   ],
   "devDependencies": {
-    "@biomejs/biome": "2.4.13",
+    "@biomejs/biome": "2.4.14",
     "@size-limit/preset-small-lib": "12.1.0",
     "@tsconfig/recommended": "^1.0.13",
     "@types/node": "25.6.0",
@@ -72,6 +73,7 @@
     "vitest": "^4.1.5"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "@stacks/network": "^7.3.1",
     "@stacks/stacks-blockchain-api-types": "^7.14.1",
     "@stacks/transactions": "7.4.0",

@@ -2,6 +2,10 @@
 
 A powerful SDK for Stacks blockchain that provides transaction simulation, batch operations, contract AST parsing, and chain tip information.
 
+Pairs with the [stxer-api](https://api.stxer.xyz) (mainnet) and
+[testnet-api](https://testnet-api.stxer.xyz). See
+[`CHANGELOG.md`](./CHANGELOG.md) for release notes.
+
 ## Installation
 
 ```bash
@@ -9,6 +13,30 @@ npm install stxer
 # or
 yarn add stxer
 ```
+
+## When to use what
+
+Pick the right tool for the task — these are not interchangeable:
+
+| Goal | Use |
+|---|---|
+| Wallet preview / pre-broadcast safety check (single tx, no session, **no debug tracing**) | [`instantSimulation`](#instant-simulation) |
+| Quick scripted multi-step simulation, browsable in the [stxer debug UI](https://stxer.xyz) | [`SimulationBuilder`](#1-transaction-simulation-v2-api) |
+| CI / Vitest contract test with custom assertions on per-step results | [`createSimulationSession`](#session-based-simulation) + [`submitSimulationSteps`](#session-based-simulation) + [`sim-helpers`](#sim-helpers-callcontract-getstxbalance-getftbalance-getnonce-readdatavar) |
+| Burn-block / tenure scenarios (PoX cycles, locked-STX unlock, time-locked redemptions) | [`addAdvanceBlocks`](#advanceblocks-burn-block-scenarios) + [`getSimulationTip`](#advanceblocks-burn-block-scenarios) |
+| Bridge / SPV peg-in (sBTC, Brotocol) | raw API + [`bitcoin.ts`](#bitcoin-spv--bridge-primitives) + [`transaction.ts`](#transaction-builders) — see the bridge demos in [`src/sample`](https://github.com/stxer/stxer-sdk/tree/master/src/sample) |
+| Bulk read against current chain state | [`batchRead`](#batch-operations) (sidecar) or [`simulationBatchReads`](#session-based-simulation) (against a session's forked state) |
+| Read-only contract calls with ABI decoding | [`callReadonly`](#clarity-api) / [`readVariable`](#clarity-api) / [`readMap`](#clarity-api) |
+
+`instantSimulation` is intentionally transient — it has **no debug
+tracing** and the simulation isn't viewable in the stxer UI. Use
+sessions when you need either of those.
+
+The bridge / `AdvanceBlocks` patterns deliberately bypass
+`SimulationBuilder` because they need typed access to per-step results
+(builder only returns the final `simulation_id`). The decision table
+above is the canonical mapping; the in-tree bridge vitest demos are
+the canonical worked examples.
 
 ## Features
 
@@ -42,7 +70,7 @@ const simulationId = await SimulationBuilder.new({
     contract_name: 'my-contract',
     source_code: '(define-public (hello) (ok "world"))',
     deployer: 'SP...', // Optional: overrides default sender
-    clarity_version: 4, // Optional: Clarity1, Clarity2, Clarity3, or Clarity4
+    clarity_version: 4, // 1 / 2 / 3 / 4 — or `ClarityVersion.Clarity4` from `@stacks/transactions`
   })
   .run();
 
@@ -54,7 +82,8 @@ const simulationId = await SimulationBuilder.new({
 The SDK supports all V2 simulation step types:
 
 ```typescript
-import { SimulationBuilder, ClarityVersion } from 'stxer';
+import { SimulationBuilder } from 'stxer';
+import { ClarityVersion } from '@stacks/transactions';
 
 const simulationId = await SimulationBuilder.new()
   .withSender('SP...')
@@ -103,11 +132,39 @@ const simulationId = await SimulationBuilder.new()
   ])
 
   // === TenureExtend Step ===
-  // Extend tenure (resets execution cost)
-  .addTenureExtend()
+  // Extend tenure (resets execution cost). Defaults to 'Extended'
+  // (full reset); pass a SIP-034 cause to reset only one dimension.
+  .addTenureExtend('ExtendedRuntime')
+
+  // === AdvanceBlocks Step ===
+  // Synthesize bitcoin and stacks blocks on top of the pinned parent
+  // tip — used to model burn-block / tenure boundaries (bridge
+  // contracts, time-locked redemptions, locked-STX unlock).
+  .addAdvanceBlocks({ bitcoin_blocks: 1, stacks_blocks_per_bitcoin: 1 })
 
   .run();
 ```
+
+#### Schema cutover (v0.8.0)
+
+The 0.8.0 release coincides with a server-side schema bump for
+simulation sessions. **Existing simulation session ids started before
+the upgrade return `HTTP 410 Gone`** — start a fresh session via
+`SimulationBuilder.run()` / `createSimulationSession()` to get a
+schema-v=2 id. Sim ids are random per-call and not persisted across
+releases by design, so this only affects in-flight callers.
+
+The fetch wrappers in `simulation-api` now throw a typed
+`SimulationError` (with `status` and `marker` fields) on non-2xx
+responses; `marker` is `'simulation_busy'` (HTTP 409),
+`'simulation_outdated'` (HTTP 410), or `null`. Pre-0.8.0 the SDK
+threw a plain `Error` whose message embedded the body — message format
+is unchanged so existing log scrapers keep working.
+
+`addTenureExtend(cause?)` now accepts an optional `TenureExtendCause`.
+The on-the-wire request shape is `{ TenureExtend: { cause } }`; the
+legacy `{ TenureExtend: [] }` shape stays parseable on the server but
+the SDK builder no longer emits it.
 
 #### Reads Batch Sub-Types
 
@@ -170,6 +227,7 @@ import {
   createSimulationSession,
   submitSimulationSteps,
   getSimulationResult,
+  getSimulationTip,
   simulationBatchReads
 } from 'stxer';
 
@@ -188,18 +246,25 @@ const stepResults = await submitSimulationSteps(sessionId, {
       { DataVar: ['SP...contract', 'my-var'] },
       { StxBalance: 'SP...' }
     ]},
-    { TenureExtend: [] }
+    { TenureExtend: { cause: 'Extended' } },
+    { AdvanceBlocks: { bitcoin_blocks: 1, stacks_blocks_per_bitcoin: 1 } }
   ]
 });
 
 console.log(`Executed ${stepResults.steps.length} steps`);
 
-// 3. Get full simulation results
+// 3. Inspect the current tip — `synthetic` flips to `true` once
+//    `AdvanceBlocks` has run; `vrf_seed` and `tenure_change` are
+//    populated only on synthetic tips.
+const tip = await getSimulationTip(sessionId);
+console.log(tip.synthetic, tip.stacks_height, tip.burn_height);
+
+// 4. Get full simulation results
 const result = await getSimulationResult(sessionId);
 console.log(result.metadata);
 console.log(result.steps);
 
-// 4. Batch reads from simulation state
+// 5. Batch reads from simulation state
 const reads = await simulationBatchReads(sessionId, {
   vars: [['SP...contract', 'my-var']],
   maps: [['SP...contract', 'my-map', '0x...']],
@@ -460,7 +525,15 @@ const ast = await getContractAST({
 
 ## Samples
 
-Runnable end-to-end examples live in [`src/sample/`](https://github.com/stxer/stxer-sdk/tree/master/src/sample) on GitHub. Samples track `master` and may evolve faster than published SDK versions; if you pin a specific SDK version, browse the matching git tag.
+Runnable end-to-end examples live in
+[`src/sample/`](https://github.com/stxer/stxer-sdk/tree/master/src/sample)
+on GitHub. **The `src/sample/` directory is intentionally excluded from
+the published npm tarball** to keep the package size down — clone the
+repo to run them locally. Samples track `master` and may evolve faster
+than published SDK versions; if you pin a specific SDK version, browse
+the matching git tag.
+
+### Core flows
 
 | Sample | What it demonstrates |
 |---|---|
@@ -472,72 +545,161 @@ Runnable end-to-end examples live in [`src/sample/`](https://github.com/stxer/st
 | [`verify-types.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/verify-types.ts) | Runtime type-drift detector. Hits every endpoint, dereferences every documented field, asserts each value's runtime type matches the declared SDK type. Run it before publishing your client after upstream changes. |
 | [`read.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/read.ts) | `batchRead`, `BatchProcessor`, and the high-level `clarity-api` helpers (`callReadonly`, `readVariable`, `readMap`). |
 
+### `AdvanceBlocks` + bridge / time-locked scenarios (0.8.0)
+
+The vitest demos below are the canonical reference for the new
+`addAdvanceBlocks` / `getSimulationTip` / `bitcoin.ts` / `sim-helpers`
+patterns. All target real **mainnet** contracts at pinned settled
+blocks — every assertion is exact.
+
+| Sample | What it demonstrates |
+|---|---|
+| [`locked-stx-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/locked-stx-vitest.test.ts) | PoX-4 locked-STX unlock: read `(stx-account ...)`, attempt pre-unlock transfer (`err u1`), `addAdvanceBlocks` past `unlock_height`, transfer the now-released amount. Includes the parent-burn-probe trick (advance with `bitcoin_blocks: 0` first to learn the parent burn height before computing N). |
+| [`sbtc-deposit-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/sbtc-deposit-vitest.test.ts) | sBTC bridge deposit, end-to-end. Uses `forgeBitcoinTx` + `AdvanceBlocks { burn_header_hashes: ... }` so `(get-burn-block-info? header-hash …)` resolves to a value we control. |
+| [`brotocol-pegin-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/brotocol-pegin-vitest.test.ts) | Brotocol BTC peg-in. Forges a Bitcoin tx + 2-tx Merkle proof + 80-byte block header; calls `finalize-peg-in-0`; asserts mint and replay rejection. The full `bitcoin.ts` SPV pipeline. |
+| [`hbtc-vault-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/hbtc-vault-vitest.test.ts) | hBTC yield-bearing vault: deposit, request-redeem, `AdvanceBlocks +1 day` to cross the rewarder window, `log-reward`, fund-claim, `AdvanceBlocks +3 days` to clear the cooldown, redeem, transfer. Exact yield arithmetic. |
+| [`zest-borrow-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/zest-borrow-vitest.test.ts) | Zest V2 lend / borrow / repay with a forged Pyth v4 price update. Patches `pyth-pnau-decoder-v3` via `SetContractCode` to bypass the Wormhole quorum / Merkle / data-source checks; `AdvanceBlocks +1` so storage's freshness gate has a synthetic-tip block_time. |
+| [`granite-leverage-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/granite-leverage-vitest.test.ts) | Granite leverage open with a forged Pyth v3 price update. Same patch-decoder pattern as Zest, applied through Granite's gl-api → gl-oracle → pyth-oracle-v3 chain. |
+
 Run any of them locally by cloning the SDK repo and:
 
 ```bash
 pnpm install
 pnpm sample:counter           # or sample:instant / failure-modes / batch-categories / verify-types
-pnpm sample:vitest            # run the Vitest contract-test sample
+pnpm sample:vitest            # run the Vitest sample suite (counter + 6 bridge / locked-STX demos)
 ```
 
 ## API Reference
 
 ### Constants
 
-- `STXER_API_MAINNET` - Mainnet API endpoint (https://api.stxer.xyz)
-- `STXER_API_TESTNET` - Testnet API endpoint (https://testnet-api.stxer.xyz)
-- `DEFAULT_STXER_API` - Default API endpoint (same as STXER_API_MAINNET)
+- `STXER_API_MAINNET` — Mainnet API endpoint (`https://api.stxer.xyz`)
+- `STXER_API_TESTNET` — Testnet API endpoint (`https://testnet-api.stxer.xyz`)
+- `DEFAULT_STXER_API` — Default API endpoint (same as `STXER_API_MAINNET`)
 
-### Simulation Builder (High-Level)
+### Simulation Builder (high-level)
 
-- `SimulationBuilder.new(options)` - Create a new simulation builder
-- `builder.useBlockHeight(height)` - Set block height for simulation
-- `builder.withSender(address)` - Set default sender address
+- `SimulationBuilder.new(options)` — Create a new simulation builder
+- `builder.useBlockHeight(height)` — Pin the parent block to fork at
+- `builder.withSender(address)` — Default sender address for unsigned txs
 
 **Transaction Steps:**
-- `builder.addContractCall(params)` - Add a contract call step
-- `builder.addSTXTransfer(params)` - Add an STX transfer step
-- `builder.addContractDeploy(params)` - Add a contract deployment step
+- `builder.addContractCall(params)` — Add a contract call step
+- `builder.addSTXTransfer(params)` — Add an STX transfer step
+- `builder.addContractDeploy(params)` — Add a contract deployment step
 
 **V2 Step Types:**
-- `builder.addEvalCode(contractId, code)` - Add arbitrary code evaluation (with state modification)
-- `builder.addSetContractCode(params)` - Directly set contract code without transaction
-- `builder.addReads(reads[])` - Batch read operations in a single step
-- `builder.addTenureExtend()` - Extend tenure (resets execution cost)
+- `builder.addEvalCode(contractId, code)` — Arbitrary code evaluation with write access
+- `builder.addSetContractCode(params)` — Replace contract code without a transaction
+- `builder.addReads(reads[])` — Batch read operations interleaved with other steps
+- `builder.addTenureExtend(cause?)` — Reset execution cost. Default `'Extended'` resets all dimensions; pass an explicit `TenureExtendCause` to reset only one SIP-034 dimension
+- `builder.addAdvanceBlocks(request)` — *(0.8.0)* Synthesize bitcoin / stacks blocks on the fork. See the [`AdvanceBlocks` section](#advanceblocks-burn-block-scenarios)
 
 **Execution:**
-- `builder.run()` - Execute the simulation and return simulation ID
+- `builder.run()` — Submit the session and return the `simulation_id`. Note: returns only the id; if you need typed per-step results, use the low-level API + `sim-helpers` instead
 
-### Programmatic Simulation APIs (Low-Level)
+### Programmatic simulation APIs (low-level)
 
-**Instant Simulation:**
-- `instantSimulation(request, options?)` - Simulate a single transaction without session
+**Instant simulation:**
+- `instantSimulation(request, options?)` — Simulate a single transaction without a session. Transient: **no debug tracing**, not viewable in the stxer UI
 
-**Session Management:**
-- `createSimulationSession(options?, apiOptions?)` - Create a new simulation session
-- `submitSimulationSteps(sessionId, request, options?)` - Submit steps to a session
-- `getSimulationResult(sessionId, options?)` - Get full simulation results
-- `simulationBatchReads(sessionId, request, options?)` - Batch reads from simulation state
+**Session management:**
+- `createSimulationSession(options?, apiOptions?)` — Create a new session, returns `id: string`
+- `submitSimulationSteps(sessionId, request, options?)` — Submit one or more steps; returns typed per-step results
+- `getSimulationResult(sessionId, options?)` — Get full session results (metadata + step summaries)
+- `getSimulationTip(sessionId, options?)` — *(0.8.0)* Read the current synthetic tip after `AdvanceBlocks` steps. See the [`AdvanceBlocks` section](#advanceblocks-burn-block-scenarios)
+- `simulationBatchReads(sessionId, request, options?)` — Batch-read the session's forked state without consuming a step slot
 
-### Chain Tip
+**Errors:**
+- `class SimulationError extends Error` — *(0.8.0)* Typed error thrown by every fetch wrapper. Fields:
+  - `.status: number` — HTTP status (409 retry, 410 start-new-session, 400 validation, 404 not found, ...)
+  - `.marker: 'simulation_busy' | 'simulation_outdated' | null` — server-side classification
+  - `.body: string` — raw upstream message
+  - `.message: string` — formatted as `"${operation} (HTTP ${status}): ${body}"`
+- `type SimulationErrorMarker` — *(0.8.0)* Exported union for `.marker`
 
-- `getTip(options?)` - Fetch current chain tip information
+### Sim helpers (`callContract`, `getStxBalance`, `getFtBalance`, `getNonce`, `readDataVar`)
+
+*New in 0.8.0.* Session-bound wrappers around `simulationBatchReads`
+that produce typed reads without hand-rolling the batch envelope. Useful
+for vitest-style tests that interleave reads with mutating steps.
+
+- `callContract(sessionId, args, options?)` — Build an unsigned contract-call tx, submit it as one step, decode the result. Returns `{ result, vmError, pcAborted, events, txid, executionCost }` for direct `expect(...)` assertions
+- `getStxBalance(sessionId, principal, options?): Promise<bigint>`
+- `getFtBalance(sessionId, contractAndToken, principal, options?): Promise<bigint>`
+- `getNonce(sessionId, principal, options?): Promise<bigint>` — session-bound (do not confuse with the Hiro-API `getOnChainNonce` in `src/sample/_helpers.ts`)
+- `readDataVar(sessionId, contractId, varName, options?)` — Returns the deserialized Clarity value
+- `parseSimulationEvent(eventJson)` — Parse one entry from `TransactionReceipt.events[]` into a typed `SimulationEvent`
+
+### Transaction builders
+
+*New in 0.8.0.* Build unsigned transaction hex without `SimulationBuilder`
+— useful when you want to control sender via the simulator's
+no-signature trust model.
+
+- `setSender(tx, sender)` — Rewrite an unsigned `StacksTransactionWire`'s spending condition so the simulator treats `sender` as the origin. Mutates and returns `tx`
+- `buildUnsignedContractCallHex(args)` — `args: { sender, contract, functionName, functionArgs, fee?, nonce? }` → hex string
+- `ftPrincipal(contractAndToken: 'SP....contract::token-name'): ClarityValue` — Build a `(contract-of (use-trait <ft-trait>))` literal for FT contract calls
+
+### Bitcoin SPV / bridge primitives
+
+*New in 0.8.0.* Forge Bitcoin transactions and SPV proofs for bridge
+peg-in scenarios. Pairs with `addAdvanceBlocks`'
+`burn_header_hashes` override so on-chain
+`(get-burn-block-info? header-hash …)` resolves to a value you control.
+
+- `forgeBitcoinTx(opts)` — Build a Bitcoin tx with chosen inputs / outputs / OP_RETURN. Returns `{ rawTx, txid, inputs, outputs }`
+- `buildBitcoinHeader(opts)` — 80-byte BTC block header with chosen prev-hash / merkle root / time / bits / nonce. Returns `{ rawHeader, hash }` where `hash` is the double-sha256 (display order, ready for `burn_header_hashes`)
+- `singleTxMerkleRoot(txid: Uint8Array): Uint8Array` — 1-tx merkle root (the txid itself)
+- `merkleProof(txids, txIndex): { hashes: Uint8Array[], treeDepth: number }`
+- `verifyMerkleProof(txid, proof, root): boolean`
+- `p2wpkhScript(pubKeyHash20)` / `p2pkhScript(pubKeyHash20)` / `opReturnScript(data)` — scriptPubKey builders
+- `sha256(data)` / `sha256d(data)` / `hexToBytes(s)` / `bytesToHex(b)`
+
+### `AdvanceBlocks` (burn-block scenarios)
+
+*New in 0.8.0.* Synthesize bitcoin / stacks blocks on top of the
+simulation's pinned parent tip — used to model burn-block / tenure
+boundaries (PoX cycles, locked-STX unlock, time-locked redemptions,
+bridge contract finalization).
+
+- `builder.addAdvanceBlocks(request)` — builder method
+- `submitSimulationSteps(id, { steps: [{ AdvanceBlocks: ... }] }, opts)` — raw step
+- `getSimulationTip(id, opts?)` — read the current synthetic tip; `synthetic: true` after at least one `AdvanceBlocks` step has run
+- `AdvanceBlocksRequest` (key fields):
+  - `bitcoin_blocks: number` — burn blocks to synthesize
+  - `stacks_blocks_per_bitcoin: number`
+  - `bitcoin_interval_secs?: U64` — burn-block-time delta; defaults to 600s
+  - `burn_header_hashes?: Record<string, string>` — per-burn-index hash override (32-byte hex), keyed by 0-based index
+  - `pox_addrs?: Record<string, [PoxAddrInput[], U128]>` — per-burn-index PoX-payout override
+  - `vrf_seeds?: Record<string, string>` — per-burn-index VRF-seed override
+
+For the canonical worked examples — including the parent-burn-probe
+trick for computing N, the `burn_header_hashes` + Merkle-proof bridge
+pattern, and the `SetContractCode` + `AdvanceBlocks` Pyth-decoder
+pattern — see the
+[bridge / time-locked vitest demos](#advanceblocks--bridge--time-locked-scenarios-080)
+on GitHub.
+
+### Chain tip
+
+- `getTip(options?)` — Global mainnet chain tip (sidecar). Distinct from `getSimulationTip` (per-session synthetic tip)
 
 ### Contract AST
 
-- `getContractAST({ contractId, stxerApi? })` - Fetch on-chain contract AST
-- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` - Parse source code to AST
+- `getContractAST({ contractId, stxerApi? })` — Fetch on-chain contract AST
+- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` — Parse source code to AST. `clarityVersion` is `ClarityVersionName` (`'Clarity1' | ... | 'Clarity4'`) — distinct from `@stacks/transactions`'s numeric `ClarityVersion` enum
 
-### Batch Operations
+### Batch operations
 
-- `batchRead(reads, options?)` - Execute batch read operations
-- `new BatchProcessor({ stxerAPIEndpoint?, batchDelayMs })` - Create a batch processor
+- `batchRead(reads, options?)` — Execute batch read operations against current chain state via the sidecar
+- `new BatchProcessor({ stxerAPIEndpoint?, batchDelayMs })` — Queue-based batch processor for high-throughput read pipelines
 
 ### Clarity API
 
-- `callReadonly(params)` - Call a read-only contract function
-- `readVariable(params)` - Read a contract variable
-- `readMap(params)` - Read from a contract map
+- `callReadonly(params)` — Call a read-only contract function
+- `readVariable(params)` — Read a contract variable
+- `readMap(params)` — Read from a contract map
 
 ## Support
 

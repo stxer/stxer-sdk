@@ -12,9 +12,60 @@ import type {
   SimulationBatchReadsRequest,
   SimulationBatchReadsResponse,
   SimulationResult,
+  SimulationTipResponse,
   SubmitSimulationStepsRequest,
   SubmitSimulationStepsResponse,
+  U64,
 } from './types';
+
+/**
+ * Server-side error markers. `simulation_busy` ↔ HTTP 409,
+ * `simulation_outdated` ↔ HTTP 410. Other errors keep `marker = null`.
+ */
+export type SimulationErrorMarker =
+  | 'simulation_busy'
+  | 'simulation_outdated'
+  | null;
+
+/**
+ * Thrown by the simulation-api fetch wrappers when the API responds
+ * with a non-2xx status. `status` carries the wire HTTP code so
+ * callers can branch on 409 (busy) / 410 (outdated) without parsing
+ * the message string. `marker` is the server-side classification
+ * extracted from the body prefix (`simulation_busy:` /
+ * `simulation_outdated:`).
+ *
+ * Pre-0.8.0 SDKs threw a plain `Error` whose message embedded the body
+ * text; that lossy form is still used for the message field here so
+ * existing log scrapers keep working.
+ */
+export class SimulationError extends Error {
+  readonly status: number;
+  readonly marker: SimulationErrorMarker;
+  readonly body: string;
+  constructor(operation: string, status: number, body: string) {
+    const marker = detectMarker(body);
+    super(`${operation} (HTTP ${status}): ${body}`);
+    this.name = 'SimulationError';
+    this.status = status;
+    this.marker = marker;
+    this.body = body;
+  }
+}
+
+function detectMarker(body: string): SimulationErrorMarker {
+  if (body.includes('simulation_busy:')) return 'simulation_busy';
+  if (body.includes('simulation_outdated:')) return 'simulation_outdated';
+  return null;
+}
+
+async function throwSimulationError(
+  operation: string,
+  response: Response,
+): Promise<never> {
+  const text = await response.text();
+  throw new SimulationError(operation, response.status, text);
+}
 
 /**
  * Options for API calls
@@ -28,8 +79,11 @@ export interface SimulationApiOptions {
  * Create simulation session options
  */
 export interface CreateSessionOptions {
-  /** Block height for simulation (optional, uses tip if not provided) */
-  block_height?: number;
+  /**
+   * Block height for simulation (optional, uses tip if not provided).
+   * u64 — `number | string`; see {@link U64}.
+   */
+  block_height?: U64;
   /** Block hash corresponding to block_height */
   block_hash?: string;
   /** Skip debug tracing for faster simulations */
@@ -81,8 +135,7 @@ export async function instantSimulation(
   );
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Instant simulation failed: ${text}`);
+    await throwSimulationError('Instant simulation failed', response);
   }
 
   return response.json() as Promise<InstantSimulationResponse>;
@@ -123,8 +176,7 @@ export async function createSimulationSession(
   });
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to create simulation session: ${text}`);
+    await throwSimulationError('Failed to create simulation session', response);
   }
 
   const result = (await response.json()) as { id: string };
@@ -174,8 +226,7 @@ export async function submitSimulationSteps(
   );
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to submit simulation steps: ${text}`);
+    await throwSimulationError('Failed to submit simulation steps', response);
   }
 
   return response.json() as Promise<SubmitSimulationStepsResponse>;
@@ -216,11 +267,55 @@ export async function getSimulationResult(
   );
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to get simulation result: ${text}`);
+    await throwSimulationError('Failed to get simulation result', response);
   }
 
   return response.json() as Promise<SimulationResult>;
+}
+
+/**
+ * Get the current tip of a simulation session.
+ *
+ * Returns the latest synthetic tip when at least one `AdvanceBlocks`
+ * step has run (`synthetic: true`, includes `vrf_seed` and
+ * `tenure_change`). Returns the parent metadata pinned at session
+ * start otherwise (`synthetic: false`, `vrf_seed` and `tenure_change`
+ * omitted).
+ *
+ * Backed by `GET /devtools/v2/simulations/{id}/tip`. Older simulator
+ * builds that predate this route respond 404.
+ *
+ * @example
+ * ```typescript
+ * import { getSimulationTip } from 'stxer';
+ *
+ * const tip = await getSimulationTip(sessionId);
+ * if (tip.synthetic) {
+ *   console.log('synthetic tip vrf_seed:', tip.vrf_seed);
+ * }
+ * ```
+ */
+export async function getSimulationTip(
+  sessionId: string,
+  options: SimulationApiOptions = {},
+): Promise<SimulationTipResponse> {
+  const apiEndpoint = options.stxerApi ?? DEFAULT_STXER_API;
+
+  const response = await fetch(
+    `${apiEndpoint}/devtools/v2/simulations/${sessionId}/tip`,
+    {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    },
+  );
+
+  if (!response.ok) {
+    await throwSimulationError('Failed to get simulation tip', response);
+  }
+
+  return response.json() as Promise<SimulationTipResponse>;
 }
 
 /**
@@ -265,8 +360,10 @@ export async function simulationBatchReads(
   );
 
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(`Failed to batch reads from simulation: ${text}`);
+    await throwSimulationError(
+      'Failed to batch reads from simulation',
+      response,
+    );
   }
 
   return response.json() as Promise<SimulationBatchReadsResponse>;

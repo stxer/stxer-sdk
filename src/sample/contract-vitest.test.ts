@@ -28,12 +28,15 @@ import {
 } from '@stacks/transactions';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
+  bytesToHex,
   createSimulationSession,
+  getSimulationTip,
   parseSimulationEvent,
   type SimulationStepInput,
+  setSender,
   submitSimulationSteps,
 } from '..';
-import { bytesToHex, setSender } from './_helpers';
+import { apiOptions } from './_helpers';
 
 const SKIP = process.env.STXER_SKIP_NETWORK_TESTS === '1';
 const scenario = SKIP ? describe.skip : describe;
@@ -42,12 +45,17 @@ const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 const CONTRACT_NAME = 'counter-under-test';
 const CONTRACT_ID = `${SENDER}.${CONTRACT_NAME}`;
 
-// Pinned mainnet fork point. SENDER's nonce at this index_block_hash is
-// FIXED_NONCE — verified once via Hiro and hardcoded so the test is
+// Pinned mainnet fork point. `FIXED_BLOCK_HASH` is the Stacks block
+// hash (the field `createSimulationSession({ block_hash })` accepts);
+// `FIXED_INDEX_BLOCK_HASH` is the corresponding index_block_hash that
+// `/tip` returns for the parent. SENDER's nonce at this fork point is
+// `FIXED_NONCE` — verified once via Hiro and hardcoded so the test is
 // self-contained.
 const FIXED_BLOCK_HEIGHT = 7_760_000;
 const FIXED_BLOCK_HASH =
   'f1c3927e12edec74aa05e7e8fa99a6d2e4b97f9b8566389aebd8a1c8a4926698';
+const FIXED_INDEX_BLOCK_HASH =
+  '259777bb66f5dab002801ba5dd6f9bdda8bd3d760c6544b7c4c6ca6dab5744d5';
 const FIXED_NONCE = 10n;
 
 const SOURCE = `
@@ -79,11 +87,14 @@ interface Session {
 }
 
 async function setupSession(): Promise<Session> {
-  const id = await createSimulationSession({
-    block_height: FIXED_BLOCK_HEIGHT,
-    block_hash: FIXED_BLOCK_HASH,
-    skip_tracing: true,
-  });
+  const id = await createSimulationSession(
+    {
+      block_height: FIXED_BLOCK_HEIGHT,
+      block_hash: FIXED_BLOCK_HASH,
+      skip_tracing: true,
+    },
+    apiOptions(),
+  );
   let nonce = FIXED_NONCE;
 
   const deployTx = await makeUnsignedContractDeploy({
@@ -131,7 +142,7 @@ async function setupSession(): Promise<Session> {
   };
 
   const submit = (steps: SimulationStepInput[]) =>
-    submitSimulationSteps(id, { steps });
+    submitSimulationSteps(id, { steps }, apiOptions());
 
   // Deploy once. Verify deploy succeeded so later tests can assume it.
   const deployResp = await submit([
@@ -144,6 +155,25 @@ async function setupSession(): Promise<Session> {
 
   return { id, buildIncrement, buildCall, submit };
 }
+
+scenario('getSimulationTip — back-compat regression', () => {
+  it('returns the pinned parent tip with synthetic=false on a fresh session', async () => {
+    const id = await createSimulationSession(
+      {
+        block_height: FIXED_BLOCK_HEIGHT,
+        block_hash: FIXED_BLOCK_HASH,
+        skip_tracing: true,
+      },
+      apiOptions(),
+    );
+    const tip = await getSimulationTip(id, apiOptions());
+    expect(tip.synthetic).toBe(false);
+    expect(tip.vrf_seed).toBeUndefined();
+    expect(tip.tenure_change).toBeUndefined();
+    expect(tip.stacks_height).toBe(FIXED_BLOCK_HEIGHT);
+    expect(tip.index_block_hash).toBe(FIXED_INDEX_BLOCK_HASH);
+  }, 30_000);
+});
 
 scenario('counter contract — happy path', () => {
   let s: Session;

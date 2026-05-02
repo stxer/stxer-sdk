@@ -33,14 +33,16 @@ import {
   PostConditionMode,
 } from '@stacks/transactions';
 import {
+  bytesToHex,
   createSimulationSession,
   getTip,
   parseSimulationEvent,
   type SimulationStepInput,
+  setSender,
   submitSimulationSteps,
   type TransactionReceipt,
 } from '..';
-import { bytesToHex, getNonce, setSender } from './_helpers';
+import { getOnChainNonce } from './_helpers';
 
 const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 const CONTRACT_NAME = 'failure-zoo';
@@ -87,7 +89,7 @@ async function main() {
   });
   console.log(`session: ${simulationId}`);
 
-  let nonce = await getNonce(SENDER, tip.index_block_hash);
+  let nonce = await getOnChainNonce(SENDER, tip.index_block_hash);
 
   const buildCall = async (functionName: string) => {
     const tx = await makeUnsignedContractCall({
