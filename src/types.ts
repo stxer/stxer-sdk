@@ -7,26 +7,42 @@
 // Sidecar Tip Types
 // =============================================================================
 
+/**
+ * Rust `u64` / `u128` fields serialize as JSON numbers but can exceed JS
+ * `Number.MAX_SAFE_INTEGER` (2^53 - 1). Accept either form: numbers are
+ * convenient for small values, decimal strings preserve full precision
+ * for large ones. Mirrors how `pox_addrs[k].payout` (u128) is typed.
+ *
+ * In practice nearly all values fit in `Number` — this typing exists so
+ * code that *might* see a large value (post-genesis cumulative cost
+ * counters, accumulated stx_burned in long simulations) cannot silently
+ * lose precision. Use `BigInt(x)` to normalize before arithmetic when in
+ * doubt.
+ */
+export type U64 = number | string;
+/** Rust `u128`. See {@link U64} for usage notes. */
+export type U128 = number | string;
+
 export interface TenureCost {
-  read_count: number;
-  read_length: number;
-  write_count: number;
-  write_length: number;
-  runtime: number;
+  read_count: U64;
+  read_length: U64;
+  write_count: U64;
+  write_length: U64;
+  runtime: U64;
 }
 
 export interface SidecarTip {
   bitcoin_height: number;
   block_hash: string;
-  block_height: number;
-  block_time: number;
+  block_height: U64;
+  block_time: U64;
   burn_block_height: number;
-  burn_block_time: number;
+  burn_block_time: U64;
   consensus_hash: string;
   index_block_hash: string;
   is_nakamoto: boolean;
   tenure_cost: TenureCost;
-  tenure_height: number;
+  tenure_height: U64;
   sortition_id: string;
   epoch_id: string;
 }
@@ -110,7 +126,32 @@ export type ClarityEpoch =
   | 'Epoch34'
   | 'Epoch35';
 
-export type ClarityVersion = 'Clarity1' | 'Clarity2' | 'Clarity3' | 'Clarity4';
+/**
+ * Wire-format Clarity version name as emitted by the stxer AST parser
+ * (`/contracts:parse-ast`). Used in {@link ClarityAbi.clarity_version}.
+ *
+ * **Distinct from the numeric `ClarityVersion` enum re-exported by
+ * `@stacks/transactions`** (1..5), which is what the SDK builder
+ * methods (`addContractDeploy`, `makeUnsignedContractDeploy`, etc.)
+ * accept. To build transactions:
+ *
+ *     import { ClarityVersion } from '@stacks/transactions';
+ *     // ClarityVersion.Clarity5 -> 5
+ *
+ * To check an AST response:
+ *
+ *     import type { ClarityVersionName } from 'stxer';
+ *     if (abi.clarity_version === 'Clarity5') { ... }
+ */
+export type ClarityVersionName =
+  | 'Clarity1'
+  | 'Clarity2'
+  | 'Clarity3'
+  | 'Clarity4'
+  | 'Clarity5';
+
+/** @deprecated Renamed to {@link ClarityVersionName} in 0.8.0 to avoid collision with `@stacks/transactions`'s numeric `ClarityVersion` enum. Re-exported for back-compat — will be removed in a future major. */
+export type ClarityVersion = ClarityVersionName;
 
 export interface ClarityAbi {
   functions: ClarityAbiFunction[];
@@ -119,7 +160,7 @@ export interface ClarityAbi {
   fungible_tokens: ClarityAbiFungibleToken[];
   non_fungible_tokens: ClarityAbiNonFungibleToken[];
   epoch: ClarityEpoch;
-  clarity_version: ClarityVersion;
+  clarity_version: ClarityVersionName;
 }
 
 export interface SymbolicExpressionField {
@@ -187,11 +228,11 @@ export interface ContractAST {
 // =============================================================================
 
 export interface ExecutionCost {
-  read_count: number;
-  read_length: number;
-  write_count: number;
-  write_length: number;
-  runtime: number;
+  read_count: U64;
+  read_length: U64;
+  write_count: U64;
+  write_length: U64;
+  runtime: U64;
 }
 
 /**
@@ -223,7 +264,11 @@ export interface TransactionReceipt {
    * `Err`.
    */
   result: string;
-  stx_burned: number;
+  /**
+   * STX (in micro-STX) burned by this transaction. u128 — accept as
+   * `number | string` to preserve precision above 2^53.
+   */
+  stx_burned: U128;
   tx_index: number;
   /**
    * Error message from the upstream Clarity VM. `null` when the tx had
@@ -450,6 +495,31 @@ export interface DataVarStep {
   DataVar: [contract_id: string, variable_name: string];
 }
 
+/**
+ * Evaluate an arbitrary read-only Clarity expression in the context of
+ * `sender` (and optional `sponsor`). The Clarity analyzer rejects any
+ * expression that would mutate state, so this is a pure projection.
+ *
+ * Use when a plain `DataVar` / `MapEntry` read isn't enough — read-only
+ * `contract-call?` projections, custom expressions, or anything that
+ * needs a specific sender principal in scope. Cheaper than `Eval` (no
+ * write access, no step slot) and the only sender-context read shape.
+ *
+ * Choosing between read variants:
+ *   - `DataVar` / `MapEntry` — direct storage reads, no Clarity
+ *     evaluation; cheapest.
+ *   - `EvalReadonly` — arbitrary read-only Clarity in sender/sponsor
+ *     context; analyzer-enforced no writes.
+ *   - `Eval` (top-level step variant on {@link SimulationStepInput},
+ *     NOT a Reads sub-type) — arbitrary Clarity with **write access**.
+ *     Use only when you need to mutate state.
+ *   - `Transaction` — real Stacks tx with receipt, events,
+ *     post-conditions, fee, nonce.
+ *
+ * @example
+ *   { EvalReadonly: ['SP...sender', '', 'SP...contract', '(get-counter)'] }
+ *   { EvalReadonly: ['SP...sender', '', 'SP...oracle', "(contract-call? .oracle get-value 'STX-USD)"] }
+ */
 export interface EvalReadonlyStep {
   /** `sponsor` is `""` (empty string) when there is no sponsor. */
   EvalReadonly: [
@@ -503,9 +573,100 @@ export interface ReadErrResult {
 export type ReadResult = ReadOkResult | ReadErrResult;
 
 /**
+ * Tenure-extend cause. `Extended` resets all cost dimensions; the
+ * SIP-034 variants reset a single dimension only.
+ */
+export type TenureExtendCause =
+  | 'Extended'
+  | 'ExtendedRuntime'
+  | 'ExtendedReadCount'
+  | 'ExtendedReadLength'
+  | 'ExtendedWriteCount'
+  | 'ExtendedWriteLength';
+
+/** PoX address used inside `AdvanceBlocksRequest.pox_addrs`. */
+export interface PoxAddrInput {
+  /** Address version byte (0..255). */
+  version: number;
+  /** Address hashbytes as hex (no `0x` prefix). */
+  hashbytes: string;
+}
+
+/**
+ * Request payload for the `AdvanceBlocks` step variant. Synthesizes
+ * bitcoin and stacks blocks on top of the simulation's pinned parent
+ * tip. Hex strings for 32-byte hashes / VRF seeds; PoX address
+ * overrides use the tuple form `[addrs, payout_ustx]` on the wire.
+ */
+export interface AdvanceBlocksRequest {
+  bitcoin_blocks: number;
+  stacks_blocks_per_bitcoin: number;
+  /** Defaults to 600 (mainnet target) upstream when omitted. */
+  bitcoin_interval_secs?: U64;
+  /**
+   * Per-burn-index burn-header-hash overrides, keyed by 0-based burn
+   * index within this batch. Hex strings (32 bytes, with or without
+   * `0x` prefix).
+   */
+  burn_header_hashes?: Record<string, string>;
+  /**
+   * Per-burn-index PoX address overrides as `[addrs, payout_ustx]`.
+   * `payout_ustx` is `u128` upstream — see {@link U128}.
+   */
+  pox_addrs?: Record<string, [PoxAddrInput[], U128]>;
+  /** Per-burn-index VRF-seed overrides as 32-byte hex strings. */
+  vrf_seeds?: Record<string, string>;
+}
+
+/**
+ * One synthesized block produced by an `AdvanceBlocks` step. Returned
+ * inside `SimulationStepResult.AdvanceBlocks.Ok` and as the `tip`
+ * fields when synthetic.
+ */
+export interface AdvancedBlockSummary {
+  stacks_height: U64;
+  burn_height: number;
+  coinbase_height: number;
+  index_block_hash: string;
+  burn_header_hash: string;
+  vrf_seed: string;
+  block_time: U64;
+  burn_block_time: U64;
+  /**
+   * `true` when this synthetic block is the first stacks block in a
+   * new tenure (i.e. follows a synthesized bitcoin block).
+   */
+  tenure_change: boolean;
+}
+
+/**
+ * Response shape for `GET /devtools/v2/simulations/{id}/tip`. When
+ * `synthetic` is `false`, fields mirror the parent metadata pinned at
+ * session start; `vrf_seed` and `tenure_change` are omitted in that
+ * case.
+ */
+export interface SimulationTipResponse {
+  synthetic: boolean;
+  stacks_height: U64;
+  burn_height: number;
+  coinbase_height: number;
+  block_time: U64;
+  burn_block_time: U64;
+  index_block_hash: string;
+  consensus_hash: string;
+  burn_header_hash: string;
+  sortition_id: string;
+  epoch: string;
+  /** Only present when `synthetic` is `true`. */
+  vrf_seed?: string;
+  /** Only present when `synthetic` is `true`. */
+  tenure_change?: boolean;
+}
+
+/**
  * Per-step result returned by `POST /devtools/v2/simulations/{id}` (the
- * "submit steps" endpoint). Mirrors the rust `RunSimulationStepResult`
- * enum — externally tagged, exactly one variant key present.
+ * "submit steps" endpoint). Externally tagged — exactly one variant key
+ * is present per object.
  *
  * Distinct from `SimulationStepSummary`, which is what
  * `GET /devtools/v2/simulations/{id}` returns and includes the original
@@ -516,7 +677,10 @@ export type SimulationStepResult =
   | { Eval: { Ok: string } | { Err: string } }
   | { SetContractCode: { Ok: null } | { Err: string } }
   | { Reads: ReadResult[] }
-  | { TenureExtend: ExecutionCost };
+  | { TenureExtend: ExecutionCost }
+  | {
+      AdvanceBlocks: { Ok: AdvancedBlockSummary[] } | { Err: string };
+    };
 
 // Simulation step types (summary format from GET /devtools/v2/simulations/{id})
 export interface TransactionStepSummary {
@@ -552,9 +716,38 @@ export interface EvalStepSummary {
   };
 }
 
+/**
+ * Echoed `AdvanceBlocks` input as serialized in the summary response.
+ * Differs from the request shape ({@link AdvanceBlocksRequest}) in two
+ * places: `bitcoin_interval_secs` is nullable (serde `Option`); each
+ * `pox_addrs` value is the `{addrs, payout}` object form (vs. the
+ * request's tuple form).
+ */
+export interface AdvanceBlocksStepEcho {
+  bitcoin_blocks: number;
+  stacks_blocks_per_bitcoin: number;
+  bitcoin_interval_secs: U64 | null;
+  burn_header_hashes: Record<string, string>;
+  pox_addrs: Record<string, { addrs: PoxAddrInput[]; payout: U128 }>;
+  vrf_seeds: Record<string, string>;
+}
+
 export interface TenureExtendStepSummary {
+  /**
+   * Echoed input shape. The server normalizes legacy `{TenureExtend: []}`
+   * inputs to `{cause: 'Extended'}` at parse time, so the summary always
+   * carries the modern form regardless of how the step was submitted.
+   */
+  TenureExtend: { cause: TenureExtendCause };
   Result: {
     TenureExtend: ExecutionCost;
+  };
+}
+
+export interface AdvanceBlocksStepSummary {
+  AdvanceBlocks: AdvanceBlocksStepEcho;
+  Result: {
+    AdvanceBlocks: { Ok: AdvancedBlockSummary[] } | { Err: string };
   };
 }
 
@@ -563,11 +756,12 @@ export type SimulationStepSummary =
   | ReadsStepSummary
   | SetContractCodeStepSummary
   | EvalStepSummary
-  | TenureExtendStepSummary;
+  | TenureExtendStepSummary
+  | AdvanceBlocksStepSummary;
 
 // Simulation metadata
 export interface SimulationMetadata {
-  block_height: number;
+  block_height: U64;
   block_hash: string;
   burn_block_height: number;
   burn_block_hash: string;
@@ -586,7 +780,7 @@ export interface SimulationResult {
 
 // Create session request
 export interface CreateSimulationRequest {
-  block_height?: number;
+  block_height?: U64;
   block_hash?: string;
   skip_tracing?: boolean;
 }
@@ -595,7 +789,39 @@ export interface CreateSimulationResponse {
   id: string;
 }
 
-// Submit steps request
+/**
+ * One step submitted to `POST /devtools/v2/simulations/{id}`. Tagged
+ * union — exactly one variant key per object.
+ *
+ * **Picking the right Clarity-execution shape** — `Transaction` /
+ * `Eval` / `Reads` differ on side-effects, cost, and what they emit:
+ *
+ *   - `Transaction` — full Stacks tx mechanics. Generates a
+ *     `TransactionReceipt` (events, vm_error, post_condition_aborted,
+ *     execution_cost), consumes nonce, charges fee, enforces
+ *     post-conditions. The only variant that emits a receipt. Use when
+ *     simulating a real user action.
+ *   - `Eval` — arbitrary Clarity with **write access** to contract
+ *     storage; no fee, no nonce, no post-conditions, no receipt — just
+ *     the resulting Clarity value or err. Use to stub state mid-session
+ *     (`var-set`, `map-set`, …) or run code with side-effects without
+ *     tx ceremony.
+ *   - `Reads` (batch of {@link ReadStep}, including `EvalReadonly`) —
+ *     pure projection, no state changes, cheapest. Use when you only
+ *     need to read derived data; `EvalReadonly` provides the
+ *     sender/sponsor context that `DataVar` / `MapEntry` cannot.
+ *
+ * `SetContractCode` replaces a contract's code (write side-effects, no
+ * fee/nonce/receipt — like `Eval` but at the contract level).
+ * `TenureExtend` resets cost dimensions. `AdvanceBlocks` synthesizes
+ * burn/stacks blocks (see {@link AdvanceBlocksRequest}).
+ *
+ * `TenureExtend` accepts both legacy `[]` (treated server-side as
+ * `cause: 'Extended'`) and modern `{ cause }` shapes. SDK 0.8.0 emits
+ * the modern form via {@link SimulationBuilder.addTenureExtend}; the
+ * legacy shape stays in this union so consumers passing literal step
+ * objects (not via the builder) still type-check.
+ */
 export type SimulationStepInput =
   | { Transaction: string }
   | {
@@ -615,7 +841,8 @@ export type SimulationStepInput =
       ];
     }
   | { Reads: ReadStep[] }
-  | { TenureExtend: [] };
+  | { TenureExtend: [] | { cause: TenureExtendCause } }
+  | { AdvanceBlocks: AdvanceBlocksRequest };
 
 export interface SubmitSimulationStepsRequest {
   steps: SimulationStepInput[];
@@ -688,7 +915,7 @@ export interface SimulationBatchReadsResponse {
 export interface InstantSimulationRequest {
   /** Transaction serialized to hex. */
   transaction: string;
-  block_height?: number;
+  block_height?: U64;
   block_hash?: string;
   reads?: ReadStep[];
 }

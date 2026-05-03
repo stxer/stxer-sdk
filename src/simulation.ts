@@ -1,54 +1,43 @@
 import {
-  AddressVersion,
   STACKS_MAINNET,
   STACKS_TESTNET,
   type StacksNetworkName,
 } from '@stacks/network';
 import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
-  AddressHashMode,
+  Cl,
+  ClarityType,
   type ClarityValue,
   ClarityVersion,
-  type MultiSigSpendingCondition,
+  cvToString,
+  deserializeCV,
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
   PostConditionMode,
-  type StacksTransactionWire,
+  serializeCV,
 } from '@stacks/transactions';
-import { c32addressDecode } from 'c32check';
 import { type AccountDataResponse, getNodeInfo, richFetch } from 'ts-clarity';
+import { bytesToHex } from './bitcoin';
 import { STXER_API_MAINNET, STXER_API_TESTNET } from './constants';
 import {
   createSimulationSession,
+  type SimulationApiOptions,
+  simulationBatchReads,
   submitSimulationSteps,
 } from './simulation-api';
-import type { ReadStep, SimulationStepInput } from './types';
-
-function setSender(tx: StacksTransactionWire, sender: string) {
-  const [addressVersion, signer] = c32addressDecode(sender);
-  switch (addressVersion) {
-    case AddressVersion.MainnetSingleSig:
-    case AddressVersion.TestnetSingleSig:
-      tx.auth.spendingCondition.hashMode = AddressHashMode.P2PKH;
-      tx.auth.spendingCondition.signer = signer;
-      break;
-    case AddressVersion.MainnetMultiSig:
-    case AddressVersion.TestnetMultiSig: {
-      const sc = tx.auth.spendingCondition;
-      tx.auth.spendingCondition = {
-        hashMode: AddressHashMode.P2SH,
-        signer,
-        fields: [],
-        signaturesRequired: 0,
-        nonce: sc.nonce,
-        fee: sc.fee,
-      } as MultiSigSpendingCondition;
-      break;
-    }
-  }
-  return tx;
-}
+import {
+  buildUnsignedContractCallHex,
+  type ContractCallTxArgs,
+  setSender,
+} from './transaction';
+import type {
+  AdvanceBlocksRequest,
+  ReadStep,
+  SimulationStepInput,
+  TenureExtendCause,
+  TransactionReceipt,
+} from './types';
 
 export interface SimulationEval {
   contract_id: string;
@@ -85,8 +74,7 @@ export class SimulationBuilder {
     return new SimulationBuilder(options);
   }
 
-  // biome-ignore lint/style/useNumberNamespace: ignore this
-  private block = NaN;
+  private block = Number.NaN;
   private sender = '';
   private steps: (
     | {
@@ -132,6 +120,12 @@ export class SimulationBuilder {
     | {
         // TenureExtend - V2 native step type
         type: 'TenureExtend';
+        cause: TenureExtendCause;
+      }
+    | {
+        // AdvanceBlocks - V2 native step type, synthesizes blocks
+        type: 'AdvanceBlocks';
+        request: AdvanceBlocksRequest;
       }
   )[] = [];
 
@@ -207,7 +201,7 @@ export class SimulationBuilder {
       ...params,
       deployer: params.deployer ?? this.sender,
       fee: params.fee ?? 0,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
     });
     return this;
   }
@@ -245,7 +239,7 @@ export class SimulationBuilder {
       type: 'SetContractCode',
       contract_id: params.contract_id,
       source_code: params.source_code,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity4,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
     });
     return this;
   }
@@ -258,9 +252,47 @@ export class SimulationBuilder {
     return this;
   }
 
-  public addTenureExtend() {
+  /**
+   * Add a `TenureExtend` step. Defaults to `cause: 'Extended'` (full
+   * cost reset) — equivalent in server-side behavior to the legacy
+   * zero-arg call.
+   *
+   * Pass an explicit `TenureExtendCause` to reset only one SIP-034
+   * dimension (`ExtendedRuntime` / `ExtendedReadCount` / etc.).
+   *
+   * On the wire SDK 0.8.0 emits the modern `{ TenureExtend: { cause } }`
+   * shape. The server still parses the legacy `[]` shape for any
+   * caller emitting raw step objects.
+   */
+  public addTenureExtend(cause: TenureExtendCause = 'Extended') {
     this.steps.push({
       type: 'TenureExtend',
+      cause,
+    });
+    return this;
+  }
+
+  /**
+   * Synthesize bitcoin and stacks blocks on top of the simulation's
+   * pinned parent tip. Used to model burn-block / tenure boundaries
+   * (bridge contracts, time-locked redemptions, locked-STX unlock).
+   *
+   * The simulator validates the request shape; older simulator builds
+   * that don't yet support `AdvanceBlocks` reject this variant with
+   * HTTP 400.
+   *
+   * @example
+   * ```typescript
+   * builder.addAdvanceBlocks({
+   *   bitcoin_blocks: 1,
+   *   stacks_blocks_per_bitcoin: 1,
+   * });
+   * ```
+   */
+  public addAdvanceBlocks(request: AdvanceBlocksRequest) {
+    this.steps.push({
+      type: 'AdvanceBlocks',
+      request,
     });
     return this;
   }
@@ -414,9 +446,15 @@ To get in touch: contact@stxer.xyz
           Reads: step.reads,
         });
       } else if (step.type === 'TenureExtend') {
-        // TenureExtend - format: []
+        // TenureExtend - modern wire shape (legacy `[]` is still parsed
+        // server-side for direct-emit consumers, but the builder always
+        // emits the explicit cause).
         v2Steps.push({
-          TenureExtend: [],
+          TenureExtend: { cause: step.cause },
+        });
+      } else if (step.type === 'AdvanceBlocks') {
+        v2Steps.push({
+          AdvanceBlocks: step.request,
         });
       } else {
         console.log(`Invalid simulation step: ${step}`);
@@ -453,13 +491,6 @@ To get in touch: contact@stxer.xyz
   }
 }
 
-// Helper function to convert Uint8Array to hex string
-function bytesToHex(bytes: Uint8Array): string {
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
 // Helper function to convert ClarityVersion to number
 function clarityVersionToNumber(version: ClarityVersion): number {
   switch (version) {
@@ -471,9 +502,177 @@ function clarityVersionToNumber(version: ClarityVersion): number {
       return 3;
     case ClarityVersion.Clarity4:
       return 4;
+    case ClarityVersion.Clarity5:
+      return 5;
     default:
-      return 4;
+      return 5;
   }
+}
+
+// =============================================================================
+// Session-bound helpers
+// =============================================================================
+//
+// Higher-level helpers that bind to an existing simulation session.
+// Wrap `submitSimulationSteps` / `simulationBatchReads` for the common
+// patterns simulation tests reach for: read a fungible-token balance,
+// read a principal's STX balance / nonce, send a contract call and
+// decode the result.
+//
+// Errors:
+//  - Wire-level failures (HTTP non-2xx) propagate as the typed
+//    `SimulationError` from `./simulation-api`.
+//  - Per-step `Err` results (validation failures) throw a normal
+//    `Error` carrying the upstream message.
+//  - VM-level failures (`vm_error`) and post-condition aborts are
+//    returned via {@link CallContractResult.vmError} / `pcAborted` —
+//    they do NOT throw, so callers can assert on them.
+
+export interface CallContractResult {
+  /** Decoded Clarity result (e.g. `(ok true)`, `(err u100)`, `u5`). */
+  result: string;
+  /** Hex-encoded raw Clarity result (SIP-005). */
+  resultHex: string;
+  /** VM-level error message, if any (e.g. arithmetic overflow). */
+  vmError: string | null;
+  /** True when one or more post-conditions tripped. */
+  pcAborted: boolean;
+  /** Full upstream receipt for callers that need more detail. */
+  receipt: TransactionReceipt;
+}
+
+/**
+ * Build, submit, and decode a contract-call transaction. The caller
+ * supplies the principal to use as `tx-sender`; nonce is auto-fetched
+ * via {@link getNonce} unless `nonce` is explicitly provided.
+ */
+export async function callContract(
+  sessionId: string,
+  args: Omit<ContractCallTxArgs, 'nonce'> & {
+    nonce?: number;
+    postConditionMode?: PostConditionMode;
+  },
+  options: SimulationApiOptions = {},
+): Promise<CallContractResult> {
+  const nonce =
+    args.nonce ?? Number(await getNonce(sessionId, args.sender, options));
+  const txHex = await buildUnsignedContractCallHex({ ...args, nonce });
+  const r = await submitSimulationSteps(
+    sessionId,
+    { steps: [{ Transaction: txHex }] },
+    options,
+  );
+  const step = r.steps[0];
+  if (!('Transaction' in step)) {
+    throw new Error(
+      `expected Transaction step, got ${JSON.stringify(step).slice(0, 200)}`,
+    );
+  }
+  if ('Err' in step.Transaction) {
+    throw new Error(`Transaction Err: ${step.Transaction.Err}`);
+  }
+  const receipt = step.Transaction.Ok;
+  return {
+    result: cvToString(deserializeCV(receipt.result)),
+    resultHex: receipt.result,
+    vmError: receipt.vm_error,
+    pcAborted: receipt.post_condition_aborted,
+    receipt,
+  };
+}
+
+/**
+ * Read the SIP-010 / hBTC-style `(get-balance principal)` value.
+ * Returns 0n if the read returns `(err …)`. Throws on infra failures.
+ */
+export async function getFtBalance(
+  sessionId: string,
+  contractId: string,
+  principal: string,
+  options: SimulationApiOptions = {},
+): Promise<bigint> {
+  const r = await simulationBatchReads(
+    sessionId,
+    {
+      readonly: [
+        [contractId, 'get-balance', serializeCV(Cl.principal(principal))],
+      ],
+    },
+    options,
+  );
+  const v = r.readonly?.[0];
+  if (!v || !('Ok' in v)) {
+    throw new Error(`get-balance(${contractId}) failed: ${JSON.stringify(v)}`);
+  }
+  const decoded = deserializeCV(v.Ok);
+  if (decoded.type === ClarityType.ResponseErr) {
+    return 0n;
+  }
+  if (decoded.type !== ClarityType.ResponseOk) {
+    throw new Error(`unexpected get-balance shape: ${cvToString(decoded)}`);
+  }
+  if (decoded.value.type !== ClarityType.UInt) {
+    throw new Error(`expected uint inside (ok …), got ${decoded.value.type}`);
+  }
+  return BigInt(decoded.value.value);
+}
+
+/** Read a principal's STX balance (uSTX) from a simulation session. */
+export async function getStxBalance(
+  sessionId: string,
+  principal: string,
+  options: SimulationApiOptions = {},
+): Promise<bigint> {
+  const r = await simulationBatchReads(
+    sessionId,
+    { stx: [principal] },
+    options,
+  );
+  const v = r.stx?.[0];
+  if (!v || !('Ok' in v)) {
+    throw new Error(`stx balance read for ${principal} failed`);
+  }
+  return BigInt(v.Ok);
+}
+
+/** Read a principal's current nonce. Returns 0n if never seen. */
+export async function getNonce(
+  sessionId: string,
+  principal: string,
+  options: SimulationApiOptions = {},
+): Promise<bigint> {
+  const r = await simulationBatchReads(
+    sessionId,
+    { nonces: [principal] },
+    options,
+  );
+  const v = r.nonces?.[0];
+  if (!v || !('Ok' in v)) return 0n;
+  return BigInt(v.Ok);
+}
+
+/**
+ * Read a Clarity data variable. Returns the decoded `ClarityValue`,
+ * or throws if the read failed.
+ */
+export async function readDataVar(
+  sessionId: string,
+  contractId: string,
+  varName: string,
+  options: SimulationApiOptions = {},
+): Promise<ClarityValue> {
+  const r = await simulationBatchReads(
+    sessionId,
+    { vars: [[contractId, varName]] },
+    options,
+  );
+  const v = r.vars?.[0];
+  if (!v || !('Ok' in v)) {
+    throw new Error(
+      `var-get ${contractId} ${varName} failed: ${JSON.stringify(v)}`,
+    );
+  }
+  return deserializeCV(v.Ok);
 }
 
 // Re-export simulation types

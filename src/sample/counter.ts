@@ -15,13 +15,15 @@ import {
   uintCV,
 } from '@stacks/transactions';
 import {
+  bytesToHex,
   createSimulationSession,
   getSimulationResult,
   getTip,
   type SimulationStepInput,
+  setSender,
   submitSimulationSteps,
 } from '..';
-import { bytesToHex, getNonce, setSender } from './_helpers';
+import { getOnChainNonce } from './_helpers';
 
 const SENDER = 'SP212Y5JKN59YP3GYG07K3S8W5SSGE4KH6B5STXER';
 const CONTRACT_NAME = 'sample-counter';
@@ -68,7 +70,7 @@ async function main() {
   });
   console.log(`session: ${simulationId}`);
 
-  let nonce = await getNonce(SENDER, tip.index_block_hash);
+  let nonce = await getOnChainNonce(SENDER, tip.index_block_hash);
 
   const deployTx = await makeUnsignedContractDeploy({
     contractName: CONTRACT_NAME,
@@ -197,9 +199,15 @@ async function main() {
       // EvalStepSummary — labeled tuple [sender, sponsor, contract_id, code]
       const [, , , code] = s.Eval;
       console.log(`  #${i} Eval ${code}`);
-    } else {
-      // TenureExtendStepSummary — only the Result is present.
+    } else if ('TenureExtend' in s) {
       console.log(`  #${i} TenureExtend cost`, s.Result.TenureExtend);
+    } else if ('AdvanceBlocks' in s) {
+      const r = s.Result.AdvanceBlocks;
+      if ('Ok' in r) {
+        console.log(`  #${i} AdvanceBlocks → ${r.Ok.length} blocks`);
+      } else {
+        console.log(`  #${i} AdvanceBlocks Err: ${r.Err}`);
+      }
     }
   }
   console.log(

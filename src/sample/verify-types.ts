@@ -20,6 +20,7 @@ import {
 } from '@stacks/transactions';
 import {
   batchRead,
+  bytesToHex,
   createSimulationSession,
   getSimulationResult,
   getTip,
@@ -29,10 +30,11 @@ import {
   type SidecarTip,
   type SimulationEvent,
   type SimulationStepInput,
+  setSender,
   simulationBatchReads,
   submitSimulationSteps,
 } from '..';
-import { bytesToHex, getNonce, setSender } from './_helpers';
+import { getOnChainNonce } from './_helpers';
 
 let passes = 0;
 const failures: string[] = [];
@@ -258,7 +260,7 @@ async function checkSession(tip: SidecarTip) {
   });
   check('createSession.id: hex(32)', isHex(id, 32));
 
-  let nonce = await getNonce(SENDER, tip.index_block_hash);
+  let nonce = await getOnChainNonce(SENDER, tip.index_block_hash);
   const buildTx = async (functionName?: string) => {
     const tx = functionName
       ? await makeUnsignedContractCall({
@@ -443,12 +445,24 @@ async function checkSession(tip: SidecarTip) {
         check(`summary.steps[${i}].Result.Eval.Ok: string`, isString(r.Ok));
       else
         check(`summary.steps[${i}].Result.Eval.Err: string`, isString(r.Err));
-    } else {
-      // TenureExtendStepSummary — only Result present.
+    } else if ('TenureExtend' in s) {
       checkExecutionCost(
         `summary.steps[${i}].Result.TenureExtend`,
         s.Result.TenureExtend,
       );
+    } else if ('AdvanceBlocks' in s) {
+      const r = s.Result.AdvanceBlocks;
+      if ('Ok' in r) {
+        check(
+          `summary.steps[${i}].Result.AdvanceBlocks.Ok: array`,
+          Array.isArray(r.Ok),
+        );
+      } else {
+        check(
+          `summary.steps[${i}].Result.AdvanceBlocks.Err: string`,
+          isString(r.Err),
+        );
+      }
     }
   }
 
@@ -491,7 +505,7 @@ async function checkSession(tip: SidecarTip) {
 
 async function checkInstant(tip: SidecarTip) {
   console.log('-- instantSimulation()');
-  const nonce = await getNonce(SENDER, tip.index_block_hash);
+  const nonce = await getOnChainNonce(SENDER, tip.index_block_hash);
   const tx = await makeUnsignedContractCall({
     contractAddress: 'SP102V8P0F7JX67ARQ77WEA3D3CFB5XW39REDT0AM',
     contractName: 'token-alex',
