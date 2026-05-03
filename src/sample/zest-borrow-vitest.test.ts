@@ -128,6 +128,9 @@ scenario(
         },
         apiOptions(),
       );
+      console.log(
+        `[zest-borrow] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+      );
     }, 60_000);
 
     it('patches pyth-pnau-decoder-v3 + advances 1 burn block', async () => {

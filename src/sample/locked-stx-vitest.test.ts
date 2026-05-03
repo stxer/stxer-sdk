@@ -124,6 +124,9 @@ scenario('locked-stx — unlock + transfer flow', () => {
       },
       apiOptions(),
     );
+    console.log(
+      `[locked-stx] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+    );
 
     const setup = await submitSimulationSteps(
       sessionId,

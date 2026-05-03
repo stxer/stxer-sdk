@@ -131,6 +131,9 @@ scenario(
         },
         apiOptions(),
       );
+      console.log(
+        `[granite-leverage] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+      );
     }, 60_000);
 
     it('patches pyth-pnau-decoder-v2 + advances 1 burn block', async () => {

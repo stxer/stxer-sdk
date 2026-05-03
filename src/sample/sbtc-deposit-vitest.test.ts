@@ -74,6 +74,9 @@ scenario(
         },
         apiOptions(),
       );
+      console.log(
+        `[sbtc-deposit] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+      );
     }, 60_000);
 
     it('resolves the sBTC signer principal from sbtc-registry', async () => {

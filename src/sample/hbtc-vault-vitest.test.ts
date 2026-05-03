@@ -122,6 +122,9 @@ scenario('hbtc-vault — deposit + reward + time-locked redeem flow', () => {
       },
       apiOptions(),
     );
+    console.log(
+      `[hbtc-vault] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+    );
   }, 60_000);
 
   it('reads pre-state — exact sBTC, hBTC, share-price', async () => {

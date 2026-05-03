@@ -95,6 +95,9 @@ async function setupSession(): Promise<Session> {
     },
     apiOptions(),
   );
+  console.log(
+    `[counter-contract] view: https://stxer.xyz/simulations/mainnet/${id}`,
+  );
   let nonce = FIXED_NONCE;
 
   const deployTx = await makeUnsignedContractDeploy({

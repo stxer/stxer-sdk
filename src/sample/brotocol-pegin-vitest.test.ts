@@ -78,6 +78,9 @@ scenario('brotocol — finalize-peg-in-0 with forged BTC tx + SPV proof', () => 
       },
       apiOptions(),
     );
+    console.log(
+      `[brotocol-pegin] view: https://stxer.xyz/simulations/mainnet/${sessionId}`,
+    );
     bridgeScript = p2wpkhScript(BRIDGE_SCRIPT_HASH);
   }, 60_000);
 
