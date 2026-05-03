@@ -186,14 +186,20 @@ scenario('counter contract — happy path', () => {
 
   it('starts at u0', async () => {
     const r = await s.submit([
-      { Eval: [SENDER, '', CONTRACT_ID, '(get-counter)'] },
+      {
+        Reads: [{ EvalReadonly: [SENDER, '', CONTRACT_ID, '(get-counter)'] }],
+      },
     ]);
     const step = r.steps[0];
-    if (!('Eval' in step) || !('Ok' in step.Eval)) {
-      throw new Error(`expected Eval.Ok, got ${JSON.stringify(step)}`);
+    if (!('Reads' in step)) {
+      throw new Error(`expected Reads, got ${JSON.stringify(step)}`);
+    }
+    const read = step.Reads[0];
+    if (!('Ok' in read)) {
+      throw new Error(`expected Reads[0].Ok, got ${JSON.stringify(read)}`);
     }
     // (ok u0) — SIP-005 hex: 07 (response::ok) 01 (uint) 00...00 (16 bytes)
-    expect(step.Eval.Ok).toBe('070100000000000000000000000000000000');
+    expect(read.Ok).toBe('070100000000000000000000000000000000');
   });
 
   it('increments to u5 and emits a print event', async () => {

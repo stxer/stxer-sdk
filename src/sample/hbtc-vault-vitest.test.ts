@@ -87,11 +87,15 @@ async function readSharePrice(sessionId: string): Promise<bigint> {
     {
       steps: [
         {
-          Eval: [
-            'SP000000000000000000002Q6VF78',
-            '',
-            STATE_HBTC,
-            '(get-share-price)',
+          Reads: [
+            {
+              EvalReadonly: [
+                'SP000000000000000000002Q6VF78',
+                '',
+                STATE_HBTC,
+                '(get-share-price)',
+              ],
+            },
           ],
         },
       ],
@@ -99,10 +103,14 @@ async function readSharePrice(sessionId: string): Promise<bigint> {
     apiOptions(),
   );
   const step = r.steps[0];
-  if (!('Eval' in step) || !('Ok' in step.Eval)) {
+  if (!('Reads' in step)) {
     throw new Error(`share-price read failed: ${JSON.stringify(step)}`);
   }
-  const decoded = deserializeCV(step.Eval.Ok);
+  const read = step.Reads[0];
+  if (!('Ok' in read)) {
+    throw new Error(`share-price read failed: ${JSON.stringify(read)}`);
+  }
+  const decoded = deserializeCV(read.Ok);
   if (decoded.type !== ClarityType.UInt) {
     throw new Error('share-price not uint');
   }
