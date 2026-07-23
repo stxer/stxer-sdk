@@ -124,7 +124,6 @@ export type ClarityEpoch =
   | 'Epoch32'
   | 'Epoch33'
   | 'Epoch34'
-  | 'Epoch35'
   | 'Epoch40';
 
 /**

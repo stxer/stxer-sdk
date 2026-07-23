@@ -4,6 +4,16 @@ All notable changes to the `stxer` SDK are documented here. The format
 loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/).
 
+## 0.10.0
+
+### Removed
+
+- **Breaking (types):** `'Epoch35'` removed from the `ClarityEpoch`
+  union. The epoch never activated — stacks-core 4.0.1 goes
+  `Epoch34` → `Epoch40` — and the upgraded parser backend returns a
+  500 for its wire value (`0x03005`), so any code passing it was
+  already broken at runtime.
+
 ## 0.9.0
 
 Adopts Stacks **Epoch 4.0 / Clarity 6** (stacks-core 4.0.1).
