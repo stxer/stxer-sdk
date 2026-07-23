@@ -504,8 +504,10 @@ function clarityVersionToNumber(version: ClarityVersion): number {
       return 4;
     case ClarityVersion.Clarity5:
       return 5;
+    case ClarityVersion.Clarity6:
+      return 6;
     default:
-      return 5;
+      return 6;
   }
 }
 

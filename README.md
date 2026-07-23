@@ -70,7 +70,7 @@ const simulationId = await SimulationBuilder.new({
     contract_name: 'my-contract',
     source_code: '(define-public (hello) (ok "world"))',
     deployer: 'SP...', // Optional: overrides default sender
-    clarity_version: 4, // 1 / 2 / 3 / 4 — or `ClarityVersion.Clarity4` from `@stacks/transactions`
+    clarity_version: 4, // 1 / 2 / 3 / 4 / 5 / 6 — or `ClarityVersion.Clarity6` from `@stacks/transactions`
   })
   .run();
 
@@ -370,7 +370,7 @@ console.log(ast.abi);
 const parsed = await parseContract({
   contractId: 'SP...contract-name',
   sourceCode: '(define-public (hello) (ok "world"))',
-  clarityVersion: '4', // Optional: '1' | '2' | '3' | '4'
+  clarityVersion: '4', // Optional: '1' | '2' | '3' | '4' | '5' | '6'
   epoch: 'Epoch33' // Optional
 });
 ```
@@ -707,7 +707,7 @@ on GitHub.
 ### Contract AST
 
 - `getContractAST({ contractId, stxerApi? })` — Fetch on-chain contract AST
-- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` — Parse source code to AST. `clarityVersion` is `ClarityVersionName` (`'Clarity1' | ... | 'Clarity4'`) — distinct from `@stacks/transactions`'s numeric `ClarityVersion` enum
+- `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` — Parse source code to AST. `clarityVersion` is `ClarityVersionName` (`'Clarity1' | ... | 'Clarity6'`) — distinct from `@stacks/transactions`'s numeric `ClarityVersion` enum
 
 ### Batch operations
 

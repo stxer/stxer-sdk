@@ -124,14 +124,15 @@ export type ClarityEpoch =
   | 'Epoch32'
   | 'Epoch33'
   | 'Epoch34'
-  | 'Epoch35';
+  | 'Epoch35'
+  | 'Epoch40';
 
 /**
  * Wire-format Clarity version name as emitted by the stxer AST parser
  * (`/contracts:parse-ast`). Used in {@link ClarityAbi.clarity_version}.
  *
  * **Distinct from the numeric `ClarityVersion` enum re-exported by
- * `@stacks/transactions`** (1..5), which is what the SDK builder
+ * `@stacks/transactions`** (1..6), which is what the SDK builder
  * methods (`addContractDeploy`, `makeUnsignedContractDeploy`, etc.)
  * accept. To build transactions:
  *
@@ -148,7 +149,8 @@ export type ClarityVersionName =
   | 'Clarity2'
   | 'Clarity3'
   | 'Clarity4'
-  | 'Clarity5';
+  | 'Clarity5'
+  | 'Clarity6';
 
 /** @deprecated Renamed to {@link ClarityVersionName} in 0.8.0 to avoid collision with `@stacks/transactions`'s numeric `ClarityVersion` enum. Re-exported for back-compat — will be removed in a future major. */
 export type ClarityVersion = ClarityVersionName;
