@@ -4,6 +4,29 @@ All notable changes to the `stxer` SDK are documented here. The format
 loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/).
 
+## 0.9.0
+
+Adopts Stacks **Epoch 4.0 / Clarity 6** (stacks-core 4.0.1).
+
+### Added
+
+- `'Epoch40'` member on the `ClarityEpoch` union and `'Clarity6'` on
+  `ClarityVersionName`; `parseContract` now accepts
+  `clarityVersion: '6'`.
+- `ClarityVersion.Clarity6` accepted by `addContractDeploy` /
+  `addSetContractCode` (via the upgraded `@stacks/transactions`), and
+  serialized as wire value `6` for `SetContractCode` steps.
+
+### Changed
+
+- `@stacks/transactions` bumped `7.4.0` → `7.5.0` (first release whose
+  `ClarityVersion` enum includes `Clarity6`).
+- Unknown future clarity versions now serialize as `6` (previously
+  silently clamped to `5`).
+- Deploy defaults remain `ClarityVersion.Clarity5` until Epoch 4.0
+  activates on mainnet (burn height 960,230); pass
+  `clarity_version: ClarityVersion.Clarity6` explicitly to opt in.
+
 ## 0.8.0
 
 Pairs with **stxer-api ≥ schema-v2** (the simulator build that ships

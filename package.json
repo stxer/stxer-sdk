@@ -1,6 +1,6 @@
 {
   "name": "stxer",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "license": "MIT",
   "author": "Kyle Fang",
   "repository": {
@@ -76,7 +76,7 @@
     "@noble/hashes": "^2.2.0",
     "@stacks/network": "^7.3.1",
     "@stacks/stacks-blockchain-api-types": "^7.14.1",
-    "@stacks/transactions": "7.4.0",
+    "@stacks/transactions": "7.5.0",
     "c32check": "^2.0.0",
     "clarity-abi": "^0.1.0",
     "ts-clarity": "^0.1.1"
