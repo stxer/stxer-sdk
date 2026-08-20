@@ -48,6 +48,7 @@ Simulate complex transaction sequences before executing them on-chain. The SDK s
 
 ```typescript
 import { SimulationBuilder } from 'stxer';
+import { Pc, PostConditionMode } from '@stacks/transactions';
 
 const simulationId = await SimulationBuilder.new({
   network: 'mainnet', // or 'testnet'
@@ -61,6 +62,10 @@ const simulationId = await SimulationBuilder.new({
     function_args: [/* clarity values */],
     sender: 'SP...', // Optional: overrides default sender
     fee: 100, // Optional: fee in microSTX
+    // Optional. Defaults to `Allow`, which checks nothing. Pass `Deny` or
+    // `Originator` (SIP-040) to simulate the protections the chain enforces.
+    post_condition_mode: PostConditionMode.Originator,
+    post_conditions: [Pc.origin().willSendLte(1_000_000).ustx()],
   })
   .addSTXTransfer({
     recipient: 'SP...',
@@ -70,7 +75,7 @@ const simulationId = await SimulationBuilder.new({
     contract_name: 'my-contract',
     source_code: '(define-public (hello) (ok "world"))',
     deployer: 'SP...', // Optional: overrides default sender
-    clarity_version: 4, // 1 / 2 / 3 / 4 / 5 / 6 — or `ClarityVersion.Clarity6` from `@stacks/transactions`
+    clarity_version: 4, // Optional. 1–6, or `ClarityVersion.*` from `@stacks/transactions`. Defaults to Clarity 6 since 0.11.0
   })
   .run();
 
@@ -603,9 +608,9 @@ pnpm sample:vitest            # run the Vitest sample suite (counter + 6 bridge 
 - `builder.withSender(address)` — Default sender address for unsigned txs
 
 **Transaction Steps:**
-- `builder.addContractCall(params)` — Add a contract call step
-- `builder.addSTXTransfer(params)` — Add an STX transfer step
-- `builder.addContractDeploy(params)` — Add a contract deployment step
+- `builder.addContractCall(params)` — Add a contract call step. Accepts optional `post_condition_mode` / `post_conditions` *(0.11.0)*
+- `builder.addSTXTransfer(params)` — Add an STX transfer step. Takes no post conditions: consensus rejects a TokenTransfer that carries any, and never consults the mode for that payload
+- `builder.addContractDeploy(params)` — Add a contract deployment step. Also accepts `post_condition_mode` / `post_conditions` *(0.11.0)*; `clarity_version` defaults to Clarity 6 *(0.11.0)*
 
 **V2 Step Types:**
 - `builder.addEvalCode(contractId, code)` — Arbitrary code evaluation with write access

@@ -7,6 +7,7 @@ import {
 } from '@stacks/transactions';
 import { describe, expect, it } from 'vitest';
 
+import { SimulationBuilder } from './simulation';
 import { buildUnsignedContractCallHex } from './transaction';
 
 /**
@@ -76,5 +77,30 @@ describe('contract-call post conditions', () => {
     );
     expect(tx.postConditionMode).toBe(PostConditionMode.Deny);
     expect(tx.postConditions.values).toHaveLength(1);
+  });
+});
+
+// The builder is the surface most callers use, and everything up to `run()`
+// is offline. This is the README's quick-start shape: if these options stop
+// being accepted, the documented example stops compiling.
+describe('SimulationBuilder post-condition options', () => {
+  it('accepts a mode and conditions on the transaction steps', () => {
+    const builder = SimulationBuilder.new({ network: 'mainnet' })
+      .withSender(SENDER)
+      .addContractCall({
+        contract_id: CONTRACT,
+        function_name: 'pox-claim-rewards',
+        function_args: [Cl.uint(141)],
+        post_condition_mode: PostConditionMode.Originator,
+        post_conditions: [Pc.origin().willSendLte(1_000_000).ustx()],
+      })
+      .addContractDeploy({
+        contract_name: 'probe',
+        source_code: '(define-read-only (f) u1)',
+        post_condition_mode: PostConditionMode.Deny,
+        post_conditions: [Pc.principal(SENDER).willSendEq(1).ustx()],
+      });
+
+    expect(builder).toBeInstanceOf(SimulationBuilder);
   });
 });
