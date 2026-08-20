@@ -14,9 +14,6 @@ importers:
       '@stacks/network':
         specifier: ^7.5.0
         version: 7.5.0
-      '@stacks/stacks-blockchain-api-types':
-        specifier: ^7.14.1
-        version: 7.14.1
       '@stacks/transactions':
         specifier: 7.5.0
         version: 7.5.0

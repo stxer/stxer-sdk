@@ -68,7 +68,6 @@
   "dependencies": {
     "@noble/hashes": "^2.2.0",
     "@stacks/network": "^7.5.0",
-    "@stacks/stacks-blockchain-api-types": "^7.14.1",
     "@stacks/transactions": "7.5.0",
     "c32check": "^2.0.0",
     "clarity-abi": "^0.1.0",

@@ -3,7 +3,6 @@ import {
   STACKS_TESTNET,
   type StacksNetworkName,
 } from '@stacks/network';
-import type { Block } from '@stacks/stacks-blockchain-api-types';
 import {
   Cl,
   ClarityType,
@@ -43,6 +42,21 @@ import type {
 export interface SimulationEval {
   contract_id: string;
   code: string;
+}
+
+/**
+ * The three fields this SDK reads from
+ * `/extended/v1/block/by_height/{height}`.
+ *
+ * Declared here rather than imported: the only reason a full `Block` type was
+ * pulled in was `@stacks/stacks-blockchain-api-types`, which is end-of-line
+ * (7.14.1, last published 2026-05-27) and was a runtime `dependency` — so
+ * every consumer of this SDK inherited a retired package for one annotation.
+ */
+interface BlockTip {
+  height: number;
+  hash: string;
+  index_block_hash: string;
 }
 
 interface SimulationBuilderOptions {
@@ -328,7 +342,7 @@ export class SimulationBuilder {
       });
       this.block = stacks_tip_height;
     }
-    const info: Block = await richFetch(
+    const info: BlockTip = await richFetch(
       `${this.stacksNodeAPI}/extended/v1/block/by_height/${this.block}?unanchored=true`,
     ).then((r) => r.json());
     if (
