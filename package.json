@@ -24,28 +24,21 @@
     "prepare": "dts build",
     "size": "size-limit",
     "start": "dts watch",
-    "test": "dts test",
+    "test": "vitest run --project unit",
+    "test:live": "vitest run --project live",
     "sample:counter": "tsx src/sample/counter.ts",
     "sample:read": "tsx src/sample/read.ts",
     "sample:instant": "tsx src/sample/instant.ts",
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts",
     "sample:verify-types": "tsx src/sample/verify-types.ts",
-    "sample:vitest": "vitest run"
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "dts lint && biome check ."
-    }
+    "sample:vitest": "vitest run --project live"
   },
   "prettier": {
     "printWidth": 80,
     "semi": true,
     "singleQuote": true,
     "trailingComma": "es5"
-  },
-  "jest": {
-    "testEnvironment": "node"
   },
   "engines": {
     "node": ">=12"
