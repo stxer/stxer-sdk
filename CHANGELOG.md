@@ -24,6 +24,12 @@ post-condition modes the chain now enforces.
   (`(concat u"a" u"b" u"c")` → `u"abc"`) where it previously failed with
   `IncorrectArgumentCount(2, 3)`. Same result via `SetContractCode`.
 
+### Fixed
+
+- The published tarball no longer carries test files. `files` excluded
+  `src/sample` but nothing else, so a test outside that directory would have
+  shipped to consumers.
+
 ### Added
 
 - `post_condition_mode` and `post_conditions` on `addContractCall` and
