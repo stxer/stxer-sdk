@@ -14,6 +14,7 @@ import {
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
+  type PostCondition,
   PostConditionMode,
   serializeCV,
 } from '@stacks/transactions';
@@ -88,6 +89,8 @@ export class SimulationBuilder {
         function_args?: ClarityValue[];
         sender: string;
         fee: number;
+        post_condition_mode?: PostConditionMode;
+        post_conditions?: PostCondition[];
       }
     | {
         // contract deploy
@@ -96,6 +99,8 @@ export class SimulationBuilder {
         deployer: string;
         fee: number;
         clarity_version: ClarityVersion;
+        post_condition_mode?: PostConditionMode;
+        post_conditions?: PostCondition[];
       }
     | {
         // STX transfer
@@ -146,6 +151,13 @@ export class SimulationBuilder {
     return this;
   }
 
+  /**
+   * There is deliberately no post-condition surface here: consensus rejects
+   * a TokenTransfer transaction that carries any post condition outright
+   * ("TokenTransfer transactions do not support post-conditions"), and the
+   * mode is never consulted for this payload. Use `addContractCall` if you
+   * need asset movements gated.
+   */
   public addSTXTransfer(params: {
     recipient: string;
     amount: number;
@@ -165,12 +177,21 @@ export class SimulationBuilder {
     return this;
   }
 
+  /**
+   * `post_condition_mode` defaults to `Allow`, which checks nothing. Pass
+   * `Deny` or `Originator` (SIP-040, epoch 3.4) to reproduce a transaction
+   * whose protections you actually want exercised — a simulation left on
+   * `Allow` never runs the unchecked-asset sweep, so it can succeed where
+   * the real transaction would abort.
+   */
   public addContractCall(params: {
     contract_id: string;
     function_name: string;
     function_args?: ClarityValue[];
     sender?: string;
     fee?: number;
+    post_condition_mode?: PostConditionMode;
+    post_conditions?: PostCondition[];
   }) {
     if (params.sender == null && this.sender === '') {
       throw new Error(
@@ -185,12 +206,15 @@ export class SimulationBuilder {
     return this;
   }
 
+  /** See {@link addContractCall} on `post_condition_mode`. */
   public addContractDeploy(params: {
     contract_name: string;
     source_code: string;
     deployer?: string;
     fee?: number;
     clarity_version?: ClarityVersion;
+    post_condition_mode?: PostConditionMode;
+    post_conditions?: PostCondition[];
   }) {
     if (params.deployer == null && this.sender === '') {
       throw new Error(
@@ -388,13 +412,17 @@ To get in touch: contact@stxer.xyz
           nonce,
           network,
           publicKey: '',
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode:
+            step.post_condition_mode ?? PostConditionMode.Allow,
+          postConditions: step.post_conditions,
           fee: step.fee,
         });
         setSender(tx, step.sender);
         v2Steps.push({ Transaction: bytesToHex(tx.serializeBytes()) });
       } else if ('sender' in step && 'recipient' in step) {
         const nonce = await nextNonce(step.sender);
+        // No postConditionMode: consensus ignores it for TokenTransfer, so
+        // the library default is inert here rather than a missing Allow.
         const tx = await makeUnsignedSTXTokenTransfer({
           recipient: step.recipient,
           amount: step.amount,
@@ -413,7 +441,9 @@ To get in touch: contact@stxer.xyz
           nonce,
           network,
           publicKey: '',
-          postConditionMode: PostConditionMode.Allow,
+          postConditionMode:
+            step.post_condition_mode ?? PostConditionMode.Allow,
+          postConditions: step.post_conditions,
           fee: step.fee,
           clarityVersion: step.clarity_version,
         });
@@ -552,7 +582,6 @@ export async function callContract(
   sessionId: string,
   args: Omit<ContractCallTxArgs, 'nonce'> & {
     nonce?: number;
-    postConditionMode?: PostConditionMode;
   },
   options: SimulationApiOptions = {},
 ): Promise<CallContractResult> {

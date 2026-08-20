@@ -18,6 +18,7 @@ import {
   type ClarityValue,
   type MultiSigSpendingCondition,
   makeUnsignedContractCall,
+  type PostCondition,
   PostConditionMode,
   type StacksTransactionWire,
   serializeTransaction,
@@ -78,9 +79,18 @@ export interface ContractCallTxArgs {
    * Post-condition mode. Defaults to `Allow` so the simulator runs
    * the call regardless of asset movements; switch to `Deny` + an
    * explicit list when a test wants to assert post-condition
-   * enforcement.
+   * enforcement, or to `Originator` (SIP-040, epoch 3.4) to sweep
+   * only the sender's own assets while leaving the called contract
+   * unconstrained.
    */
   postConditionMode?: PostConditionMode;
+  /**
+   * Post conditions to attach. Under `Deny` and `Originator` these are
+   * also the opt-in list: an asset a condition covers is exempt from
+   * the unchecked-asset sweep, which is what makes the always-passing
+   * codes (`maybe-sent`, `may-perform`) meaningful rather than inert.
+   */
+  postConditions?: PostCondition[];
 }
 
 /**
@@ -122,6 +132,7 @@ export async function buildUnsignedContractCallHex(
     publicKey: '0'.repeat(66),
     network: args.network ?? 'mainnet',
     postConditionMode: args.postConditionMode ?? PostConditionMode.Allow,
+    postConditions: args.postConditions,
   });
   setSender(tx, args.sender);
   return serializeTransaction(tx);
