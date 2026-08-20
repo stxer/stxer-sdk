@@ -4,6 +4,23 @@ All notable changes to the `stxer` SDK are documented here. The format
 loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/).
 
+## Unreleased
+
+### Added
+
+- `post_condition_mode` and `post_conditions` on `addContractCall` and
+  `addContractDeploy`, and `postConditions` on `buildUnsignedContractCallHex`
+  / `callContract`. `SimulationBuilder` previously forced
+  `PostConditionMode.Allow` with no way to override it, so a transaction
+  relying on SIP-040 `Originator` mode — or on plain `Deny` — simulated
+  with its protections switched off: the unchecked-asset sweep never ran,
+  and the simulation could succeed where the real transaction aborts.
+  The default stays `Allow`, so existing callers are unaffected.
+
+  `addSTXTransfer` deliberately gains neither. Consensus rejects a
+  TokenTransfer carrying any post condition, and never consults the mode
+  for that payload.
+
 ## 0.10.0
 
 ### Removed
