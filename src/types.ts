@@ -316,8 +316,8 @@ export interface TransactionErrResult {
 // Source of truth: `clarity/src/vm/events.rs` in
 // https://github.com/stacks-network/stacks-core —
 // `StacksTransactionEvent::json_serialize`. These types intentionally
-// differ from `@stacks/stacks-blockchain-api-types.TransactionEvent`,
-// which describes Hiro API responses with a different envelope.
+// differ from the Hiro Extended API's `TransactionEvent`, which describes
+// API responses with a different envelope.
 //
 // Numeric fields that the rust source emits via `format!("{}", u128)` /
 // `format!("{}", u64)` are typed as `string`, not `number` — the wire
