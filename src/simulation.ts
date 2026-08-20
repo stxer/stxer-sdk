@@ -239,7 +239,7 @@ export class SimulationBuilder {
       ...params,
       deployer: params.deployer ?? this.sender,
       fee: params.fee ?? 0,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity6,
     });
     return this;
   }
@@ -277,7 +277,7 @@ export class SimulationBuilder {
       type: 'SetContractCode',
       contract_id: params.contract_id,
       source_code: params.source_code,
-      clarity_version: params.clarity_version ?? ClarityVersion.Clarity5,
+      clarity_version: params.clarity_version ?? ClarityVersion.Clarity6,
     });
     return this;
   }

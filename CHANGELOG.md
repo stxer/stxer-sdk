@@ -4,7 +4,25 @@ All notable changes to the `stxer` SDK are documented here. The format
 loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/).
 
-## Unreleased
+## 0.11.0
+
+Epoch 4.0 is live on mainnet (activated at burn height 960,230), so the
+deploy defaults move to Clarity 6 and simulations can finally express the
+post-condition modes the chain now enforces.
+
+### Changed
+
+- **`addContractDeploy` and `addSetContractCode` now default to
+  `ClarityVersion.Clarity6`** (was `Clarity5`). The default was deliberately
+  held at Clarity 5 while epoch 4.0 was still pending, because a Clarity 6
+  deploy was rejected outright before activation. Callers passing an explicit
+  `clarity_version` are unaffected.
+
+  Verified end to end against mainnet at burn 963,267: `getTip()` reports
+  epoch `4.0`, a Clarity 6 deploy returns `Ok` where it previously returned
+  `InvalidStacksTransaction`, and variadic `concat` evaluates
+  (`(concat u"a" u"b" u"c")` → `u"abc"`) where it previously failed with
+  `IncorrectArgumentCount(2, 3)`. Same result via `SetContractCode`.
 
 ### Added
 
