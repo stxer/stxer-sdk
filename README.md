@@ -1,6 +1,6 @@
 # STXER SDK
 
-A powerful SDK for Stacks blockchain that provides transaction simulation, batch operations, contract AST parsing, and chain tip information.
+A powerful SDK for Stacks blockchain that provides transaction simulation, debug traces, batch operations, contract AST parsing, and chain tip information.
 
 Pairs with the [stxer-api](https://api.stxer.xyz) (mainnet) and
 [testnet-api](https://testnet-api.stxer.xyz). See
@@ -27,6 +27,7 @@ Pick the right tool for the task — these are not interchangeable:
 | Bridge / SPV peg-in (sBTC, Brotocol) | raw API + [`bitcoin.ts`](#bitcoin-spv--bridge-primitives) + [`transaction.ts`](#transaction-builders) — see the bridge demos in [`src/sample`](https://github.com/stxer/stxer-sdk/tree/master/src/sample) |
 | Bulk read against current chain state | [`batchRead`](#batch-operations) (sidecar) or [`simulationBatchReads`](#session-based-simulation) (against a session's forked state) |
 | Read-only contract calls with ABI decoding | [`callReadonly`](#clarity-api) / [`readVariable`](#clarity-api) / [`readMap`](#clarity-api) |
+| See *how* a transaction executed — every call and sub-expression, its cost, the source line behind it | [`getTransactionTrace`](#7-debug-traces) (on-chain) / [`getSimulationTrace`](#7-debug-traces) (simulated) |
 
 `instantSimulation` is intentionally transient — it has **no debug
 tracing** and the simulation isn't viewable in the stxer UI. Use
@@ -504,6 +505,148 @@ const approved = await readMap({
 
 These utilities provide type-safe ways to interact with Clarity contracts, with built-in ABI support and response unwrapping.
 
+### 7. Debug Traces
+
+A debug trace is the expression-by-expression record of how a transaction
+executed — the data behind the call tree in the [stxer debugger](https://stxer.xyz).
+Every node is one evaluated expression, with its arguments, its result, the
+cost counters either side of it, and the expressions it evaluated in turn.
+
+Fetch one for an on-chain transaction, or for a transaction step in a
+simulation session:
+
+```typescript
+import { cvToString } from '@stacks/transactions';
+import {
+  callContract,
+  getSimulationTrace,
+  getTransactionTrace,
+  traceNodeCost,
+  type TraceValue,
+} from 'stxer';
+
+// On-chain. `blockHeight` / `blockHash` are `block_height` / `block_hash` on
+// the transaction as the Stacks API returns it. A leading 0x is fine.
+const trace = await getTransactionTrace({
+  blockHeight: 1018838,
+  blockHash: '0x89945f0d9956794d453adb28d78302002a1d16885d8b4de3ee598ec69c631a54',
+  txid: '0xc1bfb9616c51a17859c48f1716eefdd5ea9646f59b8e6c082033370ae17e33fa',
+});
+
+// A value is a decoded ClarityValue, or a string when there is none (see below).
+const show = (value: TraceValue) =>
+  typeof value === 'string' ? value : cvToString(value);
+
+const { root } = trace;
+console.log(root.code);                     // SP102V8…amm-pool-v2-01:swap-helper
+console.log(show(root.result));             // (ok u112248824)
+console.log(traceNodeCost(root).runtime);   // 540244
+
+// Simulated. `callContract` returns the txid to ask for.
+const { txid } = await callContract(sessionId, { sender, contract, functionName, functionArgs });
+const simulated = await getSimulationTrace({ simulationId: sessionId, txid });
+```
+
+`blockHash` is the Stacks **block hash**, not the `index_block_hash`.
+
+A trace exists only if the transaction actually ran Clarity code: a plain STX
+transfer has none, and neither does a call rejected before it started (a
+function that is not public, say). Both fetchers then throw with
+`status === 404`. In a session, tracing must also be on — it is unless you
+passed `skip_tracing: true` — and `instantSimulation` never records a trace.
+
+#### Walking the tree
+
+`flattenTrace` lists every node in evaluation order and resolves the contract
+each one ran in. A node only names its contract where a function is entered,
+so read `contractId` from here rather than from `node.code`:
+
+```typescript
+import { flattenTrace, traceNodeCost, traceNodeSelfCost } from 'stxer';
+
+for (const { node, depth, contractId } of flattenTrace(trace.root)) {
+  console.log(`${'  '.repeat(depth)}${node.func}  runtime=${traceNodeCost(node).runtime}`);
+}
+
+// Where did the runtime go? Self costs partition the trace, so grouping
+// them accounts for the whole transaction exactly once.
+const runtimeByContract = new Map<string, number>();
+for (const { node, contractId = '' } of flattenTrace(trace.root)) {
+  const spent = traceNodeSelfCost(node).runtime;
+  runtimeByContract.set(contractId, (runtimeByContract.get(contractId) ?? 0) + spent);
+}
+```
+
+`traceNodeCost` is inclusive (the node and everything beneath it);
+`traceNodeSelfCost` excludes the children.
+
+#### Reading results
+
+`args` and `result` hold a decoded `ClarityValue`, or a **string** when the
+expression produced no value. That happens in two cases, and the string says
+which:
+
+- a runtime error, e.g. `Runtime(DivisionByZero, …)` — this aborts the transaction;
+- an early return in flight, e.g. `EarlyReturn(AssertionFailed(…))` from a
+  failed `asserts!`, `try!` or `unwrap!`. It travels up through the enclosing
+  expressions, each recording the same string, until it reaches the function
+  being called — which returns it as an ordinary value.
+
+So a string is not by itself a failed transaction: a function may early-return
+`(err u1)` to a caller that handles it. The text is diagnostic; show it, don't
+parse it.
+
+#### Mapping a node back to source
+
+A node's `id` is the `id` of the expression that produced it, in the AST of
+the contract it ran in:
+
+```typescript
+import { flattenTrace, getContractAST, indexExpressions, sliceSpan, traceContractIds } from 'stxer';
+
+// One AST per contract the transaction touched.
+const contracts = new Map();
+for (const contractId of traceContractIds(trace.root)) {
+  const ast = await getContractAST({ contractId });
+  contracts.set(contractId, { source: ast.source_code, byId: indexExpressions(ast.expressions) });
+}
+
+for (const { node, contractId } of flattenTrace(trace.root)) {
+  const contract = contracts.get(contractId);
+  const expression = contract?.byId.get(node.id);
+  if (expression) {
+    console.log(expression.span);                              // 361:6-361:95
+    console.log(sliceSpan(contract.source, expression.span));  // (is-some (get-pool-exists …))
+  }
+}
+```
+
+A contract deployed or replaced *inside* a simulation is not on chain, so
+`getContractAST` cannot know it. Run the source you deployed through
+`parseContract` instead — the ids line up the same way. See
+[`trace-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/trace-vitest.test.ts).
+
+#### Decoding blobs yourself
+
+Both endpoints serve a zstd-compressed binary blob. If you fetch or store
+blobs yourself, `decodeTrace` turns one into the same `Trace`:
+
+```typescript
+import { decodeTrace } from 'stxer';
+
+const trace = await decodeTrace(await response.arrayBuffer());
+```
+
+Decoding is pure JavaScript — no WASM, no Node built-ins — so it works
+unchanged in browsers and workers. Decompression is a small share of decode
+time, but if you decode traces in bulk you can swap in a native zstd:
+
+```typescript
+import { zstdDecompressSync } from 'node:zlib'; // Node >= 22.15
+
+const trace = await decodeTrace(blob, { decompress: zstdDecompressSync });
+```
+
 ## Configuration
 
 ### API Endpoint Constants
@@ -568,6 +711,8 @@ the matching git tag.
 | [`contract-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/contract-vitest.test.ts) | Vitest suite that drives a Clarity contract through Simulation v2 — copy-pasteable CI test template. Pinned fork point so assertions stay deterministic. |
 | [`verify-types.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/verify-types.ts) | Runtime type-drift detector. Hits every endpoint, dereferences every documented field, asserts each value's runtime type matches the declared SDK type. Run it before publishing your client after upstream changes. |
 | [`read.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/read.ts) | `batchRead`, `BatchProcessor`, and the high-level `clarity-api` helpers (`callReadonly`, `readVariable`, `readMap`). |
+| [`trace.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/trace.ts) | Profile an on-chain transaction from its debug trace: runtime attributed to each contract, and the costliest expressions printed with the source behind them. |
+| [`trace-vitest.test.ts`](https://github.com/stxer/stxer-sdk/blob/master/src/sample/trace-vitest.test.ts) | Debug traces end to end — an on-chain transaction mapped to source via `getContractAST`, and a contract deployed into a simulation mapped via `parseContract`, including where a failing call gave up. |
 
 ### `AdvanceBlocks` + bridge / time-locked scenarios (0.8.0)
 
@@ -589,7 +734,7 @@ Run any of them locally by cloning the SDK repo and:
 
 ```bash
 pnpm install
-pnpm sample:counter           # or sample:instant / failure-modes / batch-categories / verify-types
+pnpm sample:counter           # or sample:instant / failure-modes / batch-categories / trace / verify-types
 pnpm sample:vitest            # run the Vitest sample suite (counter + 6 bridge / locked-STX demos)
 ```
 
@@ -648,7 +793,7 @@ pnpm sample:vitest            # run the Vitest sample suite (counter + 6 bridge 
 that produce typed reads without hand-rolling the batch envelope. Useful
 for vitest-style tests that interleave reads with mutating steps.
 
-- `callContract(sessionId, args, options?)` — Build an unsigned contract-call tx, submit it as one step, decode the result. Returns `{ result, vmError, pcAborted, events, txid, executionCost }` for direct `expect(...)` assertions
+- `callContract(sessionId, args, options?)` — Build an unsigned contract-call tx, submit it as one step, decode the result. Returns `{ result, resultHex, vmError, pcAborted, txid, receipt }` for direct `expect(...)` assertions; events and execution cost are on `receipt`, and `txid` *(0.12.0)* is what `getSimulationTrace` takes
 - `getStxBalance(sessionId, principal, options?): Promise<bigint>`
 - `getFtBalance(sessionId, contractAndToken, principal, options?): Promise<bigint>`
 - `getNonce(sessionId, principal, options?): Promise<bigint>` — session-bound (do not confuse with the Hiro-API `getOnChainNonce` in `src/sample/_helpers.ts`)
@@ -713,6 +858,36 @@ on GitHub.
 
 - `getContractAST({ contractId, stxerApi? })` — Fetch on-chain contract AST
 - `parseContract({ sourceCode, contractId, clarityVersion?, epoch?, stxerApi? })` — Parse source code to AST. `clarityVersion` is `ClarityVersionName` (`'Clarity1' | ... | 'Clarity6'`) — distinct from `@stacks/transactions`'s numeric `ClarityVersion` enum
+- `indexExpressions(expressions): Map<number, SymbolicExpression>` — *(0.12.0)* Index an AST by expression `id`, descending into nested lists
+- `parseSpan(span): SourceSpan` — *(0.12.0)* Parse `"361:2-363:83"` into 1-based, end-inclusive `{ startLine, startColumn, endLine, endColumn }`
+- `sliceSpan(sourceCode, span): string` — *(0.12.0)* The source text an expression's span covers
+
+### Debug traces
+
+*New in 0.12.0.* See [Debug Traces](#7-debug-traces).
+
+**Fetching:**
+- `getTransactionTrace({ blockHeight, blockHash, txid, stxerApi?, decompress? }): Promise<Trace>` — Trace of an on-chain transaction. `blockHash` is the Stacks block hash, not the `index_block_hash`
+- `getSimulationTrace({ simulationId, txid, stxerApi?, decompress? }): Promise<Trace>` — Trace of a `Transaction` step in a session
+- `decodeTrace(data, { decompress? }?): Promise<Trace>` — Decode a blob you fetched yourself (`Uint8Array | ArrayBuffer`, compressed or not)
+
+**Working with a trace:**
+- `flattenTrace(root): TraceVisit[]` — Every node in evaluation order as `{ node, contractId, depth, parent }`, with the contract resolved for each
+- `traceContractIds(root): string[]` — The contracts a trace executed code in, in order of first appearance
+- `traceNodeCost(node): TraceCost` — Inclusive cost: the node and everything beneath it
+- `traceNodeSelfCost(node): TraceCost` — Exclusive cost: the node without its children. Sums to the root's cost over the whole trace
+
+**Types:**
+- `Trace` — `{ block_hash, txid, root }`. `block_hash` is all zeros for a simulated transaction
+- `TraceNode` — `{ id, code, func, args, result, costs: [before, after], children }`
+- `TraceValue` — `ClarityValue | string`; a string means the expression produced no value (runtime error, or an early return in flight)
+- `TraceCost` — the five cost counters, as plain numbers
+- `ZstdDecompress` — `(compressed: Uint8Array) => Uint8Array | Promise<Uint8Array>`
+
+**Errors:**
+- `class TraceFetchError extends Error` — Thrown by `getTransactionTrace` on a non-2xx response. `.status` (404 = no trace for that transaction), `.body`
+- `getSimulationTrace` throws [`SimulationError`](#programmatic-simulation-apis-low-level) like every other session call (404 no trace, 409 busy, 410 outdated)
+- `class TraceDecodeError extends Error` — Thrown by `decodeTrace` for input that is not a readable trace: truncated, corrupt, or a newer format version. `.offset` is where decoding stopped
 
 ### Batch operations
 

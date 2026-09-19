@@ -6,7 +6,7 @@
  */
 
 import { DEFAULT_STXER_API } from './constants';
-import type { ClarityEpoch, ContractAST } from './types';
+import type { ClarityEpoch, ContractAST, SymbolicExpression } from './types';
 
 export interface AstOptions {
   stxerApi?: string;
@@ -102,6 +102,115 @@ export async function parseContract(
   }
 
   return JSON.parse(text) as ContractAST;
+}
+
+/**
+ * Index every expression of an AST by its `id`, descending into nested
+ * lists. Ids are unique within one contract, so build one index per
+ * contract.
+ *
+ * This is the lookup table for mapping a debug-trace node back to source:
+ * a {@link TraceNode}'s `id` is the `id` of the expression that produced
+ * it.
+ *
+ * @example
+ * ```typescript
+ * const ast = await getContractAST({ contractId });
+ * const byId = indexExpressions(ast.expressions);
+ * const expression = byId.get(node.id);
+ * ```
+ */
+export function indexExpressions(
+  expressions: SymbolicExpression[],
+): Map<number, SymbolicExpression> {
+  const byId = new Map<number, SymbolicExpression>();
+  const pending = [...expressions];
+  for (let expr = pending.pop(); expr; expr = pending.pop()) {
+    byId.set(expr.id, expr);
+    if ('list' in expr.expr) {
+      pending.push(...expr.expr.list);
+    }
+  }
+  return byId;
+}
+
+/**
+ * A parsed {@link SymbolicExpression.span}. Lines and columns are
+ * 1-based, and the end position is inclusive — it points at the last
+ * character of the expression, not one past it.
+ */
+export interface SourceSpan {
+  startLine: number;
+  startColumn: number;
+  endLine: number;
+  endColumn: number;
+}
+
+/**
+ * Parse a span string of the form `startLine:startColumn-endLine:endColumn`
+ * (e.g. `"361:2-363:83"`).
+ */
+export function parseSpan(span: string): SourceSpan {
+  const match = /^(\d+):(\d+)-(\d+):(\d+)$/.exec(span);
+  if (!match) {
+    throw new Error(`Invalid source span: "${span}"`);
+  }
+  const [startLine, startColumn, endLine, endColumn] = match
+    .slice(1)
+    .map(Number);
+  return { startLine, startColumn, endLine, endColumn };
+}
+
+// Offsets at which each line of the most recently sliced source begins.
+// Slicing every node of a trace means thousands of lookups into the same
+// few sources, so one remembered entry removes nearly all the rescans.
+let lineStartsCache: { sourceCode: string; lineStarts: number[] } | undefined;
+
+function lineStartsOf(sourceCode: string): number[] {
+  if (lineStartsCache?.sourceCode !== sourceCode) {
+    const lineStarts = [0];
+    for (
+      let newline = sourceCode.indexOf('\n');
+      newline !== -1;
+      newline = sourceCode.indexOf('\n', newline + 1)
+    ) {
+      lineStarts.push(newline + 1);
+    }
+    lineStartsCache = { sourceCode, lineStarts };
+  }
+  return lineStartsCache.lineStarts;
+}
+
+/**
+ * Extract the source text an expression's span covers.
+ *
+ * Returns an empty string for a span that does not fall inside the
+ * source.
+ *
+ * @param sourceCode - The contract source, e.g. {@link ContractAST.source_code}
+ * @param span - A {@link SymbolicExpression.span}
+ *
+ * @example
+ * ```typescript
+ * sliceSpan(ast.source_code, '361:6-361:95');
+ * // '(is-some (get-pool-exists (contract-of token-x-trait) …))'
+ * ```
+ */
+export function sliceSpan(sourceCode: string, span: string): string {
+  const { startLine, startColumn, endLine, endColumn } = parseSpan(span);
+  const lineStarts = lineStartsOf(sourceCode);
+  if (
+    startLine < 1 ||
+    startColumn < 1 ||
+    endLine < startLine ||
+    endLine > lineStarts.length
+  ) {
+    return '';
+  }
+  return sourceCode.slice(
+    lineStarts[startLine - 1] + startColumn - 1,
+    lineStarts[endLine - 1] + endColumn,
+  );
 }
 
 // Re-export AST-related types for convenience

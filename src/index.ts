@@ -10,5 +10,6 @@ export * from './constants';
 export * from './simulation';
 export * from './simulation-api';
 export * from './tip';
+export * from './trace';
 export * from './transaction';
 export * from './types';
