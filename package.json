@@ -1,6 +1,6 @@
 {
   "name": "stxer",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "license": "MIT",
   "author": "Kyle Fang",
   "repository": {
@@ -32,6 +32,7 @@
     "sample:instant": "tsx src/sample/instant.ts",
     "sample:failure-modes": "tsx src/sample/failure-modes.ts",
     "sample:batch-categories": "tsx src/sample/batch-categories.ts",
+    "sample:trace": "tsx src/sample/trace.ts",
     "sample:verify-types": "tsx src/sample/verify-types.ts",
     "sample:vitest": "vitest run --project live"
   },
@@ -72,6 +73,7 @@
     "@stacks/transactions": "7.6.0",
     "c32check": "^2.0.0",
     "clarity-abi": "^0.1.0",
+    "fzstd": "^0.1.1",
     "ts-clarity": "^0.1.1"
   }
 }

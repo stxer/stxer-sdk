@@ -4,6 +4,52 @@ All notable changes to the `stxer` SDK are documented here. The format
 loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 versioning is [SemVer](https://semver.org/).
 
+## 0.12.0
+
+Debug traces: the expression-by-expression record of how a transaction
+executed — the data behind the call tree in the stxer debugger — is now
+readable from the SDK, for on-chain and simulated transactions alike.
+
+### Added
+
+- `getTransactionTrace({ blockHeight, blockHash, txid })` and
+  `getSimulationTrace({ simulationId, txid })` fetch and decode a trace
+  into a `Trace`: a tree of `TraceNode`s, each one evaluated expression
+  with its arguments, result, and the cost counters before and after it.
+  Ids may carry a `0x` prefix, so values pasted from an explorer or the
+  Stacks API work as they are.
+
+  `getTransactionTrace` throws the new `TraceFetchError` (`.status`,
+  `.body`); `getSimulationTrace` throws `SimulationError` like every other
+  session call, so existing 409 / 410 handling covers it. Both report
+  `status === 404` when there is no trace — the transaction ran no Clarity
+  code, or the session was created with `skip_tracing`.
+- `decodeTrace(data, { decompress? })` decodes a blob you fetched or stored
+  yourself. It is pure JavaScript — no WASM, no Node built-ins — so it runs
+  unchanged in browsers and workers, and every read is bounds-checked:
+  truncated, corrupt or newer-format input raises `TraceDecodeError` with
+  the byte offset rather than returning garbage. Pass `decompress` to swap
+  in a native zstd when decoding in bulk.
+- `flattenTrace`, `traceContractIds`, `traceNodeCost` and
+  `traceNodeSelfCost` for working with the tree. `flattenTrace` resolves
+  the contract every node ran in — a node only names its contract where a
+  function is entered — and self costs partition the trace, so grouping
+  them answers "where did the runtime go" exactly.
+- `indexExpressions`, `parseSpan` and `sliceSpan` map a node back to
+  source: a node's `id` is the `id` of the expression that produced it, in
+  the AST from `getContractAST` (on-chain contracts) or `parseContract`
+  (contracts deployed inside a simulation).
+- `txid` on `CallContractResult`, so a `callContract` step can be handed
+  straight to `getSimulationTrace`. The README already listed it; the type
+  now has it.
+- `pnpm sample:trace` profiles a real mainnet swap from its trace, and
+  `src/sample/trace-vitest.test.ts` covers both endpoints end to end.
+
+### Changed
+
+- New dependency: `fzstd` (pure JavaScript, zero dependencies, ~8 kB
+  minified) for zstd decompression.
+
 ## 0.11.0
 
 Epoch 4.0 is live on mainnet (activated at burn height 960,230), so the

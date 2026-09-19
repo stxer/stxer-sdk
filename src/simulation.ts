@@ -10,6 +10,7 @@ import {
   ClarityVersion,
   cvToString,
   deserializeCV,
+  deserializeTransaction,
   makeUnsignedContractCall,
   makeUnsignedContractDeploy,
   makeUnsignedSTXTokenTransfer,
@@ -583,6 +584,11 @@ export interface CallContractResult {
   vmError: string | null;
   /** True when one or more post-conditions tripped. */
   pcAborted: boolean;
+  /**
+   * Id of the submitted transaction (hex, no `0x`). Pass it to
+   * {@link getSimulationTrace} to see how the call executed.
+   */
+  txid: string;
   /** Full upstream receipt for callers that need more detail. */
   receipt: TransactionReceipt;
 }
@@ -622,6 +628,7 @@ export async function callContract(
     resultHex: receipt.result,
     vmError: receipt.vm_error,
     pcAborted: receipt.post_condition_aborted,
+    txid: deserializeTransaction(txHex).txid(),
     receipt,
   };
 }
