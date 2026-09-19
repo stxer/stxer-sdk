@@ -56,19 +56,19 @@
     }
   ],
   "devDependencies": {
-    "@biomejs/biome": "2.5.9",
-    "@size-limit/preset-small-lib": "12.1.0",
+    "@biomejs/biome": "2.5.14",
+    "@size-limit/preset-small-lib": "14.0.0",
     "@tsconfig/recommended": "^1.0.13",
-    "@types/node": "25.6.0",
+    "@types/node": "26.6.1",
     "dts-cli": "^2.0.5",
     "husky": "^9.1.7",
-    "size-limit": "12.1.0",
-    "tsx": "^4.23.12",
+    "size-limit": "14.0.0",
+    "tsx": "^4.23.13",
     "typescript": "7.0.2",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.1"
   },
   "dependencies": {
-    "@noble/hashes": "^2.3.0",
+    "@noble/hashes": "^2.4.0",
     "@stacks/network": "^7.6.0",
     "@stacks/transactions": "7.6.0",
     "c32check": "^2.0.0",

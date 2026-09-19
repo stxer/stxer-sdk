@@ -49,6 +49,9 @@ readable from the SDK, for on-chain and simulated transactions alike.
 
 - New dependency: `fzstd` (pure JavaScript, zero dependencies, ~8 kB
   minified) for zstd decompression.
+- `@noble/hashes` bumped `^2.3.0` → `^2.4.0`. Dev tooling was brought up
+  to date as well (vitest 5, size-limit 14, `@types/node` 26); the built
+  JavaScript is byte-for-byte unchanged by it.
 
 ## 0.11.0
 
